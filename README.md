@@ -1,8 +1,19 @@
 # estimateur-immo
 
-Estime le prix au m² d'un bien (maison ou appartement) dans une commune, à partir des ventes
-réellement enregistrées dans les **Demandes de valeurs foncières géolocalisées (DVF)**
+Estime une fourchette de prix pour un bien (maison ou appartement) dans une commune, à partir des
+ventes réellement enregistrées dans les **Demandes de valeurs foncières géolocalisées (DVF)**
 publiées sur data.gouv.fr.
+
+```powershell
+python estimer.py --commune Reims --type Appartement --surface 65
+```
+
+```
+Reims - Appartement, 65 m²
+Fourchette estimée : 135 000 € à 207 000 €
+Prix médian : 172 000 € (2 643 €/m²)
+Basé sur 1829 ventes.
+```
 
 État actuel, testé sur le département de la Marne (51), ventes de 2025 :
 
@@ -11,9 +22,11 @@ publiées sur data.gouv.fr.
 | Chargement du fichier DVF d'un département | fait |
 | Nettoyage des ventes (maisons et appartements, prix au m²) | fait |
 | Statistiques de prix par commune et par type de bien | fait |
-| Outil en ligne de commande `estimer.py` | à venir |
-| Graphique des communes les plus chères | à venir |
+| Outil en ligne de commande `estimer.py` | fait |
+| Graphique des communes les plus chères | fait |
 | API (FastAPI) réutilisant les mêmes fonctions | à venir |
+
+![Communes les plus chères du département 51](docs/communes_les_plus_cheres.png)
 
 ## Le trajet des données
 
@@ -26,10 +39,13 @@ de `immo.py`.
       │                          │                          │                          │
       │   charger("51")          │   nettoyer(df)           │   prix_par_commune(df)   │
       └────────────────────────► └────────────────────────► └────────────────────────► └──► data/prix_communes.csv
+                                                                                                    │
+                                                         estimer(...)  et  classer_communes(...) ◄──┘
+                                                         (estimation d'un bien)   (classement des communes)
 ```
 
 Le fichier d'origine `data/51.csv` n'est **jamais modifié**. Les fonctions travaillent sur des
-copies en mémoire, et seul `prix_communes.csv` est écrit.
+copies en mémoire. Seuls `data/prix_communes.csv` et l'image du graphique sont écrits.
 
 ## Qui fait quoi, qui appelle qui
 
@@ -38,39 +54,41 @@ estimateur-immo/
 ├── data/                 fichiers de données, ignorés par Git
 │   ├── 51.csv            entrée : le fichier DVF du département (téléchargé à la main)
 │   └── prix_communes.csv sortie : les statistiques par commune (créé par explorer.py)
+├── docs/
+│   └── communes_les_plus_cheres.png   le graphique (créé par graphique.py)
 │
-├── immo.py               LA LOGIQUE : charger(), nettoyer(), prix_par_commune()
-├── explorer.py           un script qui APPELLE immo.py pour explorer et produire le CSV
-├── estimer.py            (à venir) un second script qui appellera immo.py
+├── immo.py               LA LOGIQUE : toutes les fonctions
+├── explorer.py           script : explore les données et produit prix_communes.csv
+├── estimer.py            script : l'outil en ligne de commande
+├── graphique.py          script : trace le graphique
 ├── requirements.txt      les bibliothèques à installer
 └── README.md
 ```
 
 ```
- explorer.py ──── importe et appelle ────►  immo.py ──── lit ────►  data/51.csv
-      │
-      └──────────────── écrit ───────────►  data/prix_communes.csv
+ explorer.py ───┐                        ┌──► data/51.csv              (lecture)
+ estimer.py  ───┼── importent immo.py ───┤
+ graphique.py ──┘                        └──► data/prix_communes.csv   (lecture)
+
+ écritures : explorer.py  → data/prix_communes.csv
+             graphique.py → docs/communes_les_plus_cheres.png
 ```
 
 - **`immo.py` fait le travail.** Il contient les fonctions, et seulement elles. Il ne lit pas
   d'arguments de terminal et n'affiche rien par défaut. Le numéro de département, le chemin
   des données et les seuils sont des paramètres, jamais écrits en dur dans les calculs.
-- **`explorer.py` est un script de travail.** Il n'a aucune logique propre : il appelle les
-  fonctions de `immo.py` et affiche des diagnostics pour comprendre les données.
-- **`estimer.py` (à venir) sera une autre « façade »** sur les mêmes fonctions : elle lira les
-  arguments du terminal, puis appellera `immo.py`. Plus tard, une API jouera le même rôle.
+- **Les trois scripts sont des « façades ».** Chacun lit ses entrées (arguments du terminal,
+  constantes), appelle les fonctions de `immo.py` et présente le résultat. Ils n'ont aucune
+  logique de calcul propre.
+- **Pourquoi cette séparation :** la logique est écrite une seule fois. Une API pourra l'appeler
+  comme le fait déjà le terminal. Les erreurs de `estimer()` sont des `ValueError` : le terminal
+  les affiche, une API pourra les transformer en réponse HTTP 4xx.
 
-Cette séparation est le point central : la logique est écrite une seule fois, et plusieurs
-interfaces (terminal, API) peuvent la réutiliser.
+### Ordre d'utilisation
 
-### Ce qui se passe quand on lance `python explorer.py`
-
-1. `charger("51")` lit `data/51.csv` et renvoie le tableau brut `df`.
-2. Le script affiche quelques diagnostics sur `df` (taille, types de biens, cases vides).
-3. `nettoyer(df, verbose=True)` filtre les ventes et affiche ce que retire chaque étape. Il
-   renvoie un nouveau tableau, `propre`.
-4. `prix_par_commune(propre)` calcule les statistiques par commune et par type de bien.
-5. Le résultat est écrit dans `data/prix_communes.csv`.
+1. `python explorer.py` lit `data/51.csv`, nettoie, agrège et écrit `data/prix_communes.csv`.
+   Il affiche aussi des diagnostics sur les données (taille, types de biens, cases vides).
+2. `python estimer.py ...` et `python graphique.py` lisent ensuite `data/prix_communes.csv`.
 
 ## Les fonctions de `immo.py`
 
@@ -122,6 +140,55 @@ médiane mêlant maisons et appartements n'aurait pas de sens). Colonnes :
 
 Sur le département 51 : 529 lignes (489 maisons, 40 appartements).
 
+### `charger_prix_communes()`
+
+Relit `data/prix_communes.csv`. Si le fichier n'existe pas, lève une `FileNotFoundError` qui
+indique comment le générer.
+
+### `estimer(prix, commune, type_local, surface, ventes_min=10)`
+
+Cherche la commune et le type de bien dans le tableau des statistiques et renvoie un
+dictionnaire : `prix_bas` (surface × 1er quartile), `prix_median`, `prix_haut` (surface × 3e
+quartile), `prix_m2_median`, `nombre_ventes`, `commune`, `type_local`, `surface`.
+
+Le nom de la commune est comparé sans tenir compte de la casse, des accents ni des tirets :
+`epernay`, `ÉPERNAY` et `Épernay` désignent la même commune, comme `chalons en champagne` et
+`Châlons-en-Champagne`.
+
+Erreurs, toutes levées en `ValueError` avec un message lisible :
+
+| Cas | Message (extrait) |
+|---|---|
+| Surface nulle ou négative | La surface doit être positive |
+| Type de bien autre que Maison ou Appartement | Type de bien inconnu |
+| Nom de commune absent du tableau | Commune introuvable |
+| Commune sans vente de ce type de bien | Aucune vente exploitable de maison à ... |
+| Moins de 10 ventes | Seulement N vente(s) ... : il en faut au moins 10 |
+| Plusieurs communes de même nom | Plusieurs communes s'appellent ... (codes ...) |
+
+### `classer_communes(prix, type_local, ventes_min=10)`
+
+Classe les communes d'un type de bien de la plus chère à la moins chère (médiane du prix au
+m²), en ne gardant que celles qui comptent assez de ventes. Utilisée par `graphique.py`.
+
+## Les scripts
+
+### `estimer.py`
+
+```powershell
+python estimer.py --commune Épernay --type Maison --surface 110
+python estimer.py -h
+```
+
+Les trois arguments sont obligatoires. En cas d'erreur, le message est affiché sur la sortie
+d'erreur et le code de retour vaut 1, sans trace d'erreur Python.
+
+### `graphique.py`
+
+Trace deux classements en barres horizontales, un pour les maisons (les 15 communes les plus
+chères) et un pour les appartements, avec la médiane du prix au m² et le nombre de ventes. Seules
+les communes d'au moins 10 ventes sont classées. L'image est écrite dans `docs/`.
+
 ## Choix de méthode
 
 - **Médiane plutôt que moyenne.** Une seule vente aberrante (un bien d'exception, une erreur
@@ -129,8 +196,16 @@ Sur le département 51 : 529 lignes (489 maisons, 40 appartements).
 - **Une fourchette plutôt qu'un prix unique.** Les deux quartiles encadrent la moitié centrale
   des ventes.
 - **Le nombre de ventes compte.** Beaucoup de communes n'ont qu'une ou deux ventes : leur
-  médiane n'est pas fiable. L'outil final refusera de donner une fourchette sous 10 ventes
-  (77 couples commune/type de bien atteignent ce seuil sur le département 51).
+  médiane n'est pas fiable. L'outil refuse de donner une fourchette sous 10 ventes. Sur le
+  département 51, 77 couples commune/type de bien atteignent ce seuil (69 pour les maisons, 8 pour
+  les appartements).
+
+## Limites
+
+L'estimation est une **statistique descriptive** : la médiane et les quartiles des ventes passées
+d'une commune, multipliés par la surface. Ce n'est pas un modèle prédictif. Elle ne tient pas compte
+du nombre de pièces, de l'étage, de l'état du bien, du terrain, du quartier ni de l'évolution
+récente des prix. Elle donne un ordre de grandeur, pas une évaluation.
 
 ## Les données
 
@@ -156,27 +231,22 @@ Placer ensuite le fichier DVF du département dans `data/<numéro>.csv` (par exe
 `data/51.csv`), puis :
 
 ```powershell
-python explorer.py
+python explorer.py                 # produit data/prix_communes.csv
+python estimer.py --commune Reims --type Appartement --surface 65
+python graphique.py                # produit docs/communes_les_plus_cheres.png
 ```
 
 Depuis du code Python, les fonctions s'utilisent directement :
 
 ```python
-from immo import charger, nettoyer, prix_par_commune
+from immo import charger, nettoyer, prix_par_commune, estimer
 
-brut = charger("51")
-propre = nettoyer(brut, verbose=True)
+propre = nettoyer(charger("51"), verbose=True)
 stats = prix_par_commune(propre)
+print(estimer(stats, "Reims", "Appartement", 65))
 ```
 
 ## Suite prévue
 
-`estimer.py`, un outil en ligne de commande qui répondra à une requête comme :
-
-```powershell
-python estimer.py --commune Reims --type Appartement --surface 65
-```
-
-en affichant une fourchette de prix fondée sur `data/prix_communes.csv`, avec une gestion des
-erreurs (commune inconnue, casse du nom, moins de 10 ventes). Puis un graphique des communes les
-plus chères, et une API qui réutilisera les fonctions de `immo.py`.
+Une API (FastAPI) qui réutilisera les fonctions de `immo.py`, et la prise en charge de plusieurs
+départements.
