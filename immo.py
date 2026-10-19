@@ -1,4 +1,8 @@
-"""Fonctions du projet estimateur-immo : charger, nettoyer (puis prix_par_commune, estimer)."""
+"""Logique du projet estimateur-immo : chargement, nettoyage et agrégation des ventes DVF.
+
+Ce module ne lit aucun argument et n'affiche rien par défaut : il est appelé par les
+scripts (explorer.py, bientôt estimer.py) et pourra l'être par une API.
+"""
 
 from pathlib import Path
 
@@ -69,13 +73,34 @@ def nettoyer(df, prix_m2_min=PRIX_M2_MIN, prix_m2_max=PRIX_M2_MAX, verbose=False
     df = df[lignes_par_vente == 1]
     _noter(verbose, "4. Une seule ligne par vente", avant, len(df))
 
-    # 5. Le prix au m² : une nouvelle colonne, prix divisé par surface (les deux > 0 ici).
+    # Le prix au m² : une nouvelle colonne, prix divisé par surface (les deux > 0 ici).
     df["prix_m2"] = df["valeur_fonciere"] / df["surface_reelle_bati"]
 
-    # 6. Valeurs aberrantes : on garde les prix au m² entre les deux seuils (inclus).
+    # 5. Valeurs aberrantes : on garde les prix au m² entre les deux seuils (inclus).
     avant = len(df)
     df = df[df["prix_m2"].between(prix_m2_min, prix_m2_max)]
-    _noter(verbose, f"6. Prix au m² entre {prix_m2_min} et {prix_m2_max}", avant, len(df))
+    _noter(verbose, f"5. Prix au m² entre {prix_m2_min} et {prix_m2_max}", avant, len(df))
 
     # Les filtres laissent des numéros de ligne "troués" : on renumérote de 0 à n-1.
     return df.reset_index(drop=True)
+
+
+def prix_par_commune(df):
+    """Calcule, par commune et par type de bien, les statistiques du prix au m².
+
+    Reçoit le tableau déjà nettoyé (le résultat de nettoyer()). Renvoie un tableau avec une
+    ligne par commune et par type_local, et les colonnes : code_commune, nom_commune,
+    type_local, mediane, quartile_1, quartile_3 (du prix_m2) et nombre_ventes.
+    """
+    # Le code de commune identifie la commune de façon unique ; le nom sert à l'affichage.
+    grouped = df.groupby(["code_commune", "nom_commune", "type_local"])["prix_m2"]
+
+    # Médiane, 1er et 3e quartile (un lambda, car quantile() prend un paramètre) et nombre de ventes.
+    stats = grouped.agg(
+        mediane="median",
+        quartile_1=lambda s: s.quantile(0.25),
+        quartile_3=lambda s: s.quantile(0.75),
+        nombre_ventes="count",
+    ).reset_index()  # remet commune, nom et type en colonnes (ils étaient dans l'index)
+
+    return stats

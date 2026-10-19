@@ -1,33 +1,47 @@
-import pandas as pd
-from immo import charger, nettoyer
+"""Script de travail : explore les données DVF d'un département et teste les fonctions de immo.py.
 
-df = pd.read_csv("data/51.csv", dtype={"code_departement": str, "code_commune": str, "code_postal": str})
-print(df.shape)  
+À lancer depuis la racine du projet : python explorer.py
+"""
+
+from immo import DATA_DIR, charger, nettoyer, prix_par_commune
+
+DEPARTEMENT = "51"
+
+# --- Fichier brut ---
+df = charger(DEPARTEMENT)
+print(df.shape)
 print(df.columns)    # la liste des noms de colonnes
-print(df.head())      # les 5 premières lignes
+print(df.head())     # les 5 premières lignes
 
-code_counts = df["type_local"].value_counts(dropna=False)  # compter les occurrences de chaque type de local, y compris les NaN
+# Répartition des types de biens (dropna=False : compte aussi les cases vides)
+code_counts = df["type_local"].value_counts(dropna=False)
 print(code_counts)
 
-# --- Test 1 : les lignes sans type_local (des terrains ?) ---
+# --- Lignes sans type_local ---
 sans_type = df[df["type_local"].isna()]  # filtre : on garde les lignes où type_local est vide
 print(len(sans_type))                                # combien de lignes
 print(sans_type["surface_terrain"].notna().sum())    # combien ont une surface de terrain
 print(sans_type["nature_culture"].notna().sum())     # combien ont une nature de culture
 
-# les "inclassables" : ni nature_culture ni surface_terrain (& = ET)
+# Les lignes sans nature_culture ni surface_terrain (& = ET)
 inclassables = sans_type[sans_type["nature_culture"].isna() & sans_type["surface_terrain"].isna()]
 print(len(inclassables))
 print(inclassables[["nature_mutation", "valeur_fonciere", "nombre_lots", "id_parcelle"]].head())
 
-# --- Test 2 : les lignes sans surface_reelle_bati, par type_local ---
+# --- Lignes sans surface_reelle_bati, par type_local ---
 sans_surface = df[df["surface_reelle_bati"].isna()]
 print(sans_surface["type_local"].value_counts(dropna=False))
 
-print(df.isna().sum())  # compter le nombre de valeurs manquantes par colonne
+print(df.isna().sum())  # nombre de valeurs manquantes par colonne
 
-# --- Étape 2 : test de nettoyer() ---
-propre = nettoyer(charger("51"), verbose=True)
+# --- Nettoyage ---
+propre = nettoyer(df, verbose=True)
 print(propre.shape)
 print(propre[["nom_commune", "type_local", "valeur_fonciere", "surface_reelle_bati", "prix_m2"]].head())
 print(propre["prix_m2"].describe().round(0))
+
+# --- Prix par commune ---
+prix = prix_par_commune(propre)
+print(prix.shape)
+print(prix.head())
+prix.to_csv(DATA_DIR / "prix_communes.csv", index=False)
