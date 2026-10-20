@@ -64,14 +64,16 @@ estimateur-immo/
 ├── explorer.py           script : explore les données et produit prix_communes.csv
 ├── estimer.py            script : l'outil en ligne de commande
 ├── graphique.py          script : trace le graphique
+├── api.py                l'API HTTP (FastAPI) : appelle immo.py pour le site
 ├── requirements.txt      les bibliothèques à installer
 └── README.md
 ```
 
 ```
  explorer.py ───┐                        ┌──► data/<département> <année>.csv   (lecture)
- estimer.py  ───┼── importent immo.py ───┤
- graphique.py ──┘                        └──► data/prix_communes.csv           (lecture)
+ estimer.py  ───┤                        │
+ graphique.py ──┼── importent immo.py ───┤
+ api.py ────────┘                        └──► data/prix_communes.csv           (lecture)
 
  écritures : explorer.py  → data/prix_communes.csv
              graphique.py → docs/communes_les_plus_cheres.png
@@ -81,12 +83,12 @@ estimateur-immo/
   d'arguments de terminal et ne fait ni `print`, ni `input`, ni `sys.exit` : il reçoit des
   paramètres et renvoie des valeurs ou lève des exceptions. Le département, les années, le dossier
   des données et les seuils sont des paramètres, jamais écrits en dur dans les calculs.
-- **Les trois scripts sont des « façades ».** Chacun lit ses entrées (arguments du terminal,
-  constantes), appelle les fonctions de `immo.py` et présente le résultat. Ils n'ont aucune
-  logique de calcul propre.
-- **Pourquoi cette séparation :** la logique est écrite une seule fois. Une API pourra l'appeler
-  comme le fait déjà le terminal. Les erreurs de `estimer()` sont des `ValueError` : le terminal
-  les affiche, une API pourra les transformer en réponse HTTP 4xx.
+- **Les scripts et l'API sont des « façades ».** Chacun lit ses entrées (arguments du terminal,
+  requête HTTP, constantes), appelle les fonctions de `immo.py` et présente le résultat. Ils n'ont
+  aucune logique de calcul propre.
+- **Pourquoi cette séparation :** la logique est écrite une seule fois. L'API l'appelle comme le
+  fait le terminal. Les erreurs de `estimer()` sont des `ValueError` : le terminal les affiche,
+  l'API les transforme en réponse HTTP 404 ou 422.
 
 ### Ordre d'utilisation
 
@@ -167,16 +169,26 @@ Le nom de la commune est comparé sans tenir compte de la casse, des accents ni 
 `epernay`, `ÉPERNAY` et `Épernay` désignent la même commune, comme `chalons en champagne` et
 `Châlons-en-Champagne`.
 
-Erreurs, toutes levées en `ValueError` avec un message lisible :
+Erreurs, toutes levées en `ValueError` avec un message lisible. Deux sous-classes les distinguent :
+`ParametreInvalide` (la requête est incorrecte) et `BienIntrouvable` (la requête est correcte,
+mais les données ne permettent pas de répondre). L'API en tire le code HTTP.
 
-| Cas | Message (extrait) |
-|---|---|
-| Surface nulle ou négative | La surface doit être positive |
-| Type de bien autre que Maison ou Appartement | Type de bien inconnu |
-| Nom de commune absent du tableau | Commune introuvable |
-| Commune sans vente de ce type de bien | Aucune vente exploitable de maison à ... |
-| Moins de 10 ventes | Seulement N vente(s) ... : il en faut au moins 10 |
-| Plusieurs communes de même nom | Plusieurs communes s'appellent ... (codes ...) |
+| Cas | Exception | Message (extrait) | Code HTTP |
+|---|---|---|---|
+| Surface hors de 0 à 10 000 m² (ou `nan`, `inf`) | `ParametreInvalide` | La surface doit être comprise entre 0 et 10000 m² | 422 |
+| Type de bien autre que Maison ou Appartement | `ParametreInvalide` | Type de bien inconnu | 422 |
+| Plusieurs communes de même nom | `ParametreInvalide` | Plusieurs communes s'appellent ... (codes ...) | 422 |
+| Nom de commune absent du tableau | `BienIntrouvable` | Commune introuvable | 404 |
+| Commune sans vente de ce type de bien | `BienIntrouvable` | Aucune vente exploitable de maison à ... | 404 |
+| Moins de 10 ventes | `BienIntrouvable` | Seulement N vente(s) ... : il en faut au moins 10 | 404 |
+
+### `noms_communes(prix)` et `zone_couverte(prix)`
+
+`noms_communes` renvoie les noms des communes du tableau, sans doublon, triés sans tenir compte
+des accents. `zone_couverte` décrit ce que couvrent les données : les départements (déduits des
+codes de commune), la première et la dernière année, le nombre de communes. Rien n'est écrit en
+dur : changer de département ou d'années change la réponse. Les deux servent à l'API
+(`/communes` et `/info`).
 
 ### `classer_communes(prix, type_local, ventes_min=10)`
 
@@ -200,6 +212,33 @@ d'erreur et le code de retour vaut 1, sans trace d'erreur Python.
 Trace deux classements en barres horizontales, un pour les maisons et un pour les appartements
 (les 15 communes les plus chères de chaque type), avec la médiane du prix au m² et le nombre de
 ventes. Seules les communes d'au moins 10 ventes sont classées. L'image est écrite dans `docs/`.
+
+## L'API
+
+`api.py` expose les fonctions de `immo.py` en HTTP, pour le site. Elle ne contient aucune logique
+métier : elle traduit les requêtes en appels à `immo.py` et les résultats en réponses JSON.
+`data/prix_communes.csv` est lu **une seule fois**, au démarrage ; si le fichier manque, le
+serveur refuse de démarrer avec un message clair.
+
+```powershell
+python -m uvicorn api:app --reload      # http://127.0.0.1:8000, documentation sur /docs
+```
+
+| Route | Réponse |
+|---|---|
+| `GET /health` | `{"status": "ok"}` : vérifie que le service tourne |
+| `GET /communes` | la liste des noms de communes connues (autocomplétion) |
+| `GET /info` | la zone couverte, déduite des données : `{"departements": ["51"], "annee_min": 2023, "annee_max": 2025, "nombre_communes": 586}` |
+| `GET /estimation?commune=Reims&type_local=Appartement&surface=65` | le dictionnaire de `estimer()` |
+
+Erreurs de `/estimation`, au format `{"detail": "message"}` : **404** si le bien est introuvable
+(commune inconnue, aucune vente de ce type, moins de 10 ventes), **422** si un paramètre est
+invalide (surface, type de bien, commune ambiguë). Un paramètre manquant ou non numérique donne
+aussi un 422, dont le détail est une liste (format standard de FastAPI).
+
+Le **CORS** limite les appels depuis un navigateur aux sites listés dans la variable
+d'environnement `ORIGINES_AUTORISEES` (séparés par des virgules). Par défaut :
+`https://www.tatane.me`, `https://tatane.me` et `http://localhost:4321`.
 
 ## Choix de méthode
 
@@ -260,6 +299,7 @@ exemple `data/51 2023.csv`, `data/51 2024.csv` et `data/51 2025.csv`), puis :
 python explorer.py                 # produit data/prix_communes.csv
 python estimer.py --commune Reims --type Appartement --surface 65
 python graphique.py                # produit docs/communes_les_plus_cheres.png
+python -m uvicorn api:app          # lance l'API sur http://127.0.0.1:8000
 ```
 
 Depuis du code Python, les fonctions s'utilisent directement :
@@ -277,5 +317,5 @@ print(estimer(stats, "Reims", "Appartement", 65))
 
 ## Suite prévue
 
-Une API (FastAPI) qui réutilisera les fonctions de `immo.py`, et la prise en charge de plusieurs
+La mise en ligne de l'API (conteneur Docker, serveur, HTTPS), puis la prise en charge de plusieurs
 départements.
