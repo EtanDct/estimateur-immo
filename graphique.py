@@ -70,7 +70,7 @@ def main():
     )
 
     _tracer(ax1, maisons, f"Maisons : {n_maisons} communes les plus chères (sur {len(maisons)})")
-    _tracer(ax2, appartements, f"Appartements : {len(appartements)} communes avec au moins {VENTES_MIN} ventes")
+    _tracer(ax2, appartements, f"Appartements : {n_apparts} communes les plus chères (sur {len(appartements)})")
     ax2.set_xlabel("Prix médian au m² (€)", color=ENCRE_DISCRETE, fontsize=9, loc="left")
     ax2.set_xlim(0, max(maisons["mediane"].max(), appartements["mediane"].max()) * 1.38)
 
@@ -78,7 +78,8 @@ def main():
         f"Communes les plus chères du département {departement}",
         x=0.02, ha="left", fontsize=14, fontweight="bold", color=ENCRE,
     )
-    fig.text(0.02, 0.945, f"Médiane du prix au m² des ventes DVF. Seules les communes avec au moins {VENTES_MIN} ventes sont classées.",
+    annees = f"{prix['annee_min'].min()} à {prix['annee_max'].max()}"
+    fig.text(0.02, 0.945, f"Médiane du prix au m² des ventes DVF de {annees}. Seules les communes avec au moins {VENTES_MIN} ventes sont classées.",
              ha="left", fontsize=9.5, color=ENCRE_SECONDAIRE)
     fig.tight_layout(rect=(0, 0, 1, 0.94), h_pad=2.5)
 

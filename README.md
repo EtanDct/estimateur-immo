@@ -10,16 +10,16 @@ python estimer.py --commune Reims --type Appartement --surface 65
 
 ```
 Reims - Appartement, 65 m²
-Fourchette estimée : 135 000 € à 207 000 €
-Prix médian : 172 000 € (2 643 €/m²)
-Basé sur 1829 ventes.
+Fourchette estimée : 134 000 € à 207 000 €
+Prix médian : 170 000 € (2 613 €/m²)
+Basé sur 5329 ventes de 2023 à 2025.
 ```
 
-État actuel, testé sur le département de la Marne (51), ventes de 2025 :
+État actuel, testé sur le département de la Marne (51), ventes de 2023 à 2025 :
 
 | Fonctionnalité | Statut |
 |---|---|
-| Chargement du fichier DVF d'un département | fait |
+| Chargement des fichiers DVF d'un département, sur plusieurs années | fait |
 | Nettoyage des ventes (maisons et appartements, prix au m²) | fait |
 | Statistiques de prix par commune et par type de bien | fait |
 | Outil en ligne de commande `estimer.py` | fait |
@@ -30,12 +30,13 @@ Basé sur 1829 ventes.
 
 ## Le trajet des données
 
-Tout part d'un fichier brut et se transforme en trois temps. Chaque flèche est une fonction
+Tout part des fichiers bruts et se transforme en trois temps. Chaque flèche est une fonction
 de `immo.py`.
 
 ```
- data/51.csv                tableau brut               ventes propres              statistiques
- (fichier DVF)              27 342 lignes              5 905 lignes                529 lignes
+ data/51 2023.csv
+ data/51 2024.csv           tableau brut               ventes propres              statistiques
+ data/51 2025.csv           86 538 lignes              17 562 lignes               656 lignes
       │                          │                          │                          │
       │   charger("51")          │   nettoyer(df)           │   prix_par_commune(df)   │
       └────────────────────────► └────────────────────────► └────────────────────────► └──► data/prix_communes.csv
@@ -44,15 +45,17 @@ de `immo.py`.
                                                          (estimation d'un bien)   (classement des communes)
 ```
 
-Le fichier d'origine `data/51.csv` n'est **jamais modifié**. Les fonctions travaillent sur des
-copies en mémoire. Seuls `data/prix_communes.csv` et l'image du graphique sont écrits.
+Les fichiers d'origine ne sont **jamais modifiés**. Les fonctions travaillent sur des copies en
+mémoire. Seuls `data/prix_communes.csv` et l'image du graphique sont écrits.
 
 ## Qui fait quoi, qui appelle qui
 
 ```
 estimateur-immo/
 ├── data/                 fichiers de données, ignorés par Git
-│   ├── 51.csv            entrée : le fichier DVF du département (téléchargé à la main)
+│   ├── 51 2023.csv       entrées : un fichier DVF par département et par année
+│   ├── 51 2024.csv       (téléchargés à la main, nommés « <département> <année>.csv »)
+│   ├── 51 2025.csv
 │   └── prix_communes.csv sortie : les statistiques par commune (créé par explorer.py)
 ├── docs/
 │   └── communes_les_plus_cheres.png   le graphique (créé par graphique.py)
@@ -66,16 +69,17 @@ estimateur-immo/
 ```
 
 ```
- explorer.py ───┐                        ┌──► data/51.csv              (lecture)
+ explorer.py ───┐                        ┌──► data/<département> <année>.csv   (lecture)
  estimer.py  ───┼── importent immo.py ───┤
- graphique.py ──┘                        └──► data/prix_communes.csv   (lecture)
+ graphique.py ──┘                        └──► data/prix_communes.csv           (lecture)
 
  écritures : explorer.py  → data/prix_communes.csv
              graphique.py → docs/communes_les_plus_cheres.png
 ```
 
 - **`immo.py` fait le travail.** Il contient les fonctions, et seulement elles. Il ne lit pas
-  d'arguments de terminal et n'affiche rien par défaut. Le numéro de département, le chemin
+  d'arguments de terminal et ne fait ni `print`, ni `input`, ni `sys.exit` : il reçoit des
+  paramètres et renvoie des valeurs ou lève des exceptions. Le département, les années, le dossier
   des données et les seuils sont des paramètres, jamais écrits en dur dans les calculs.
 - **Les trois scripts sont des « façades ».** Chacun lit ses entrées (arguments du terminal,
   constantes), appelle les fonctions de `immo.py` et présente le résultat. Ils n'ont aucune
@@ -86,31 +90,36 @@ estimateur-immo/
 
 ### Ordre d'utilisation
 
-1. `python explorer.py` lit `data/51.csv`, nettoie, agrège et écrit `data/prix_communes.csv`.
-   Il affiche aussi des diagnostics sur les données (taille, types de biens, cases vides).
+1. `python explorer.py` lit les fichiers DVF, nettoie, agrège et écrit `data/prix_communes.csv`.
+   Il affiche aussi des diagnostics sur les données (taille, types de biens, cases vides) et ce
+   que retire chaque étape du nettoyage.
 2. `python estimer.py ...` et `python graphique.py` lisent ensuite `data/prix_communes.csv`.
 
 ## Les fonctions de `immo.py`
 
-### `charger(departement)`
+### `charger(departement, annees=(2023, 2024, 2025), dossier=data/)`
 
-Lit `data/<departement>.csv` et renvoie le tableau brut, sans rien filtrer. Les codes de
+Lit les fichiers `<dossier>/<departement> <annee>.csv` et les empile en un seul tableau brut,
+sans rien filtrer. Une colonne `annee` indique de quel fichier vient chaque ligne. Les codes de
 département, de commune et postal sont lus comme du **texte** : sinon `01` deviendrait `1`, et
-`2A`/`2B` (Corse) poseraient problème.
+`2A`/`2B` (Corse) poseraient problème. Les `id_mutation` commencent par l'année
+(`2025-653539`) : deux fichiers ne peuvent pas avoir le même identifiant de vente.
 
-### `nettoyer(df, prix_m2_min=300, prix_m2_max=10000, verbose=False)`
+### `nettoyer(df, prix_m2_min=300, prix_m2_max=10000)`
 
 Garde uniquement les ventes exploitables pour estimer un prix au m² et ajoute la colonne
-`prix_m2`. Résultat sur le département 51 :
+`prix_m2`. Ce que retire chaque étape est noté dans le journal du module (`logging`, niveau
+INFO) : rien ne s'affiche tant que le programme appelant n'active pas les messages, comme le fait
+`explorer.py`. Résultat sur le département 51, années 2023 à 2025 :
 
 | # | Filtre | Pourquoi | Lignes retirées | Restantes |
 |---|---|---|---:|---:|
-| | Fichier brut | | | 27 342 |
-| 1 | `type_local` = Maison ou Appartement | Les terrains, dépendances et locaux professionnels n'ont pas de surface de logement | 19 508 | 7 834 |
-| 2 | `nature_mutation` = Vente | Échanges, adjudications et ventes sur plan n'ont pas un prix comparable | 58 | 7 776 |
-| 3 | Prix > 0 et surface > 0 | Un prix ou une surface vide ou nul ne permet pas de calcul | 5 | 7 771 |
-| 4 | Une seule ligne par vente | Voir ci-dessous | 1 813 | 5 958 |
-| 5 | Prix au m² entre 300 et 10 000 € | Écarte les ventes symboliques (1 €) et les erreurs de saisie (180 000 €/m²) | 53 | 5 905 |
+| | Fichiers bruts | | | 86 538 |
+| 1 | `type_local` = Maison ou Appartement | Les terrains, dépendances et locaux professionnels n'ont pas de surface de logement | 62 814 | 23 724 |
+| 2 | `nature_mutation` = Vente | Échanges, adjudications et ventes sur plan n'ont pas un prix comparable | 672 | 23 052 |
+| 3 | Prix > 0 et surface > 0 | Un prix ou une surface vide ou nul ne permet pas de calcul | 34 | 23 018 |
+| 4 | Une seule ligne par vente | Voir ci-dessous | 5 245 | 17 773 |
+| 5 | Prix au m² entre 300 et 10 000 € | Écarte les ventes symboliques (1 €) et les erreurs de saisie (180 000 €/m²) | 211 | 17 562 |
 
 **Pourquoi « une seule ligne par vente » ?** Dans le fichier DVF, une vente (`id_mutation`)
 occupe une ligne par parcelle ou par lot, et la colonne `valeur_fonciere` y répète le prix
@@ -120,9 +129,10 @@ chacun. On ne garde donc que les ventes qui n'ont qu'un seul logement.
 Le comptage se fait **après** le filtre sur les maisons et appartements : une maison vendue
 avec un garage ou un terrain reste une vente à un seul logement.
 
-**Limite connue :** parmi les ventes à plusieurs lignes, environ la moitié ne contiennent en
-réalité qu'un seul logement, répété sur plusieurs parcelles. Elles sont écartées avec les
-autres. C'est prudent, et il reste assez de données, mais ce n'est pas parfait.
+**Limite connue :** parmi les ventes à plusieurs lignes (1 868 sur ces trois années), environ la
+moitié (914) ne contiennent en réalité qu'un seul logement, répété sur plusieurs parcelles. Elles
+sont écartées avec les autres. C'est prudent, et il reste assez de données, mais ce n'est pas
+parfait.
 
 ### `prix_par_commune(df)`
 
@@ -137,19 +147,21 @@ médiane mêlant maisons et appartements n'aurait pas de sens). Colonnes :
 | `mediane` | Médiane du prix au m² |
 | `quartile_1`, `quartile_3` | 1er et 3e quartile : 25 % des ventes sont en dessous du premier, 25 % au-dessus du second |
 | `nombre_ventes` | Nombre de ventes sur lesquelles reposent ces chiffres |
+| `annee_min`, `annee_max` | Première et dernière année des ventes prises en compte |
 
-Sur le département 51 : 529 lignes (489 maisons, 40 appartements).
+Sur le département 51 : 656 lignes (586 maisons, 70 appartements).
 
-### `charger_prix_communes()`
+### `charger_prix_communes(dossier=data/)`
 
-Relit `data/prix_communes.csv`. Si le fichier n'existe pas, lève une `FileNotFoundError` qui
-indique comment le générer.
+Relit `prix_communes.csv`. Si le fichier n'existe pas, lève une `FileNotFoundError` qui indique
+comment le générer.
 
 ### `estimer(prix, commune, type_local, surface, ventes_min=10)`
 
 Cherche la commune et le type de bien dans le tableau des statistiques et renvoie un
 dictionnaire : `prix_bas` (surface × 1er quartile), `prix_median`, `prix_haut` (surface × 3e
-quartile), `prix_m2_median`, `nombre_ventes`, `commune`, `type_local`, `surface`.
+quartile), `prix_m2_median`, `nombre_ventes`, `annee_min`, `annee_max`, `commune`, `type_local`,
+`surface`.
 
 Le nom de la commune est comparé sans tenir compte de la casse, des accents ni des tirets :
 `epernay`, `ÉPERNAY` et `Épernay` désignent la même commune, comme `chalons en champagne` et
@@ -185,9 +197,9 @@ d'erreur et le code de retour vaut 1, sans trace d'erreur Python.
 
 ### `graphique.py`
 
-Trace deux classements en barres horizontales, un pour les maisons (les 15 communes les plus
-chères) et un pour les appartements, avec la médiane du prix au m² et le nombre de ventes. Seules
-les communes d'au moins 10 ventes sont classées. L'image est écrite dans `docs/`.
+Trace deux classements en barres horizontales, un pour les maisons et un pour les appartements
+(les 15 communes les plus chères de chaque type), avec la médiane du prix au m² et le nombre de
+ventes. Seules les communes d'au moins 10 ventes sont classées. L'image est écrite dans `docs/`.
 
 ## Choix de méthode
 
@@ -195,22 +207,36 @@ les communes d'au moins 10 ventes sont classées. L'image est écrite dans `docs
   de saisie) déplace beaucoup la moyenne et très peu la médiane.
 - **Une fourchette plutôt qu'un prix unique.** Les deux quartiles encadrent la moitié centrale
   des ventes.
-- **Le nombre de ventes compte.** Beaucoup de communes n'ont qu'une ou deux ventes : leur
-  médiane n'est pas fiable. L'outil refuse de donner une fourchette sous 10 ventes. Sur le
-  département 51, 77 couples commune/type de bien atteignent ce seuil (69 pour les maisons, 8 pour
-  les appartements).
+- **Le nombre de ventes compte.** Beaucoup de communes n'ont que quelques ventes : leur
+  médiane n'est pas fiable. L'outil refuse de donner une fourchette sous 10 ventes.
+- **Trois années par défaut (2023 à 2025).** Plus d'années donnent plus de ventes par commune,
+  mais mélangent des niveaux de prix différents. Dans la Marne, le prix médian au m² est resté
+  stable de 2022 à 2025 (maisons autour de 1 920 €, appartements entre 2 270 € et 2 350 €), alors
+  que 2021 est nettement plus bas (1 854 € et 2 146 €). Le nombre de couples commune/type de bien
+  qui atteignent 10 ventes dépend directement des années retenues :
+
+  | Années retenues | Couples avec au moins 10 ventes |
+  |---|---:|
+  | 2025 seule | 77 |
+  | 2024 à 2025 | 154 |
+  | **2023 à 2025 (défaut)** | **225** (205 maisons, 20 appartements) |
+  | 2022 à 2025 | 300 |
+  | 2021 à 2025 | 355 |
+
+  Le choix se règle avec le paramètre `annees` de `charger()` ou la constante `ANNEES`.
 
 ## Limites
 
 L'estimation est une **statistique descriptive** : la médiane et les quartiles des ventes passées
 d'une commune, multipliés par la surface. Ce n'est pas un modèle prédictif. Elle ne tient pas compte
 du nombre de pièces, de l'étage, de l'état du bien, du terrain, du quartier ni de l'évolution
-récente des prix. Elle donne un ordre de grandeur, pas une évaluation.
+des prix à l'intérieur de la période. Elle donne un ordre de grandeur, pas une évaluation.
 
 ## Les données
 
-- Source : DVF géolocalisées, sur data.gouv.fr (un fichier CSV par département).
-- Période du fichier utilisé : du 2 janvier au 31 décembre 2025.
+- Source : DVF géolocalisées, sur data.gouv.fr (un fichier CSV par département et par année).
+- Période des fichiers utilisés : du 2 janvier 2023 au 31 décembre 2025.
+- Nommage attendu : `data/<département> <année>.csv`, par exemple `data/51 2025.csv`.
 - Une ligne du fichier n'est **pas** une vente : c'est une parcelle ou un lot d'une vente.
   Une même vente peut donc occuper plusieurs lignes qui partagent le même `id_mutation`.
 - Colonnes utilisées : `id_mutation`, `nature_mutation`, `valeur_fonciere`, `code_commune`,
@@ -227,8 +253,8 @@ python -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
-Placer ensuite le fichier DVF du département dans `data/<numéro>.csv` (par exemple
-`data/51.csv`), puis :
+Placer ensuite les fichiers DVF du département dans `data/`, avec le nommage ci-dessus (par
+exemple `data/51 2023.csv`, `data/51 2024.csv` et `data/51 2025.csv`), puis :
 
 ```powershell
 python explorer.py                 # produit data/prix_communes.csv
@@ -239,9 +265,12 @@ python graphique.py                # produit docs/communes_les_plus_cheres.png
 Depuis du code Python, les fonctions s'utilisent directement :
 
 ```python
+import logging
 from immo import charger, nettoyer, prix_par_commune, estimer
 
-propre = nettoyer(charger("51"), verbose=True)
+logging.basicConfig(level=logging.INFO, format="%(message)s")  # facultatif : affiche ce que retire nettoyer()
+
+propre = nettoyer(charger("51"))
 stats = prix_par_commune(propre)
 print(estimer(stats, "Reims", "Appartement", 65))
 ```

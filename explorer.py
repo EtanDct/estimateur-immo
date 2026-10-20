@@ -3,13 +3,18 @@
 À lancer depuis la racine du projet : python explorer.py
 """
 
+import logging
+
 from immo import DATA_DIR, charger, nettoyer, prix_par_commune
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")  # affiche le journal de nettoyer()
 
 DEPARTEMENT = "51"
 
 # --- Fichier brut ---
 df = charger(DEPARTEMENT)
 print(df.shape)
+print(df["annee"].value_counts().sort_index())  # lignes par année
 print(df.columns)    # la liste des noms de colonnes
 print(df.head())     # les 5 premières lignes
 
@@ -35,7 +40,7 @@ print(sans_surface["type_local"].value_counts(dropna=False))
 print(df.isna().sum())  # nombre de valeurs manquantes par colonne
 
 # --- Nettoyage ---
-propre = nettoyer(df, verbose=True)
+propre = nettoyer(df)
 print(propre.shape)
 print(propre[["nom_commune", "type_local", "valeur_fonciere", "surface_reelle_bati", "prix_m2"]].head())
 print(propre["prix_m2"].describe().round(0))

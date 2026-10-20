@@ -14,6 +14,13 @@ def _euros(montant):
     return f"{round(montant, -3):,.0f}".replace(",", " ") + " €"
 
 
+def _periode(resultat):
+    """Écrit la période des ventes : « en 2024 » ou « de 2023 à 2025 »."""
+    if resultat["annee_min"] == resultat["annee_max"]:
+        return f"en {resultat['annee_min']}"
+    return f"de {resultat['annee_min']} à {resultat['annee_max']}"
+
+
 def main():
     """Lit les arguments du terminal, appelle immo.estimer() et affiche le résultat."""
     parser = argparse.ArgumentParser(description="Estime une fourchette de prix à partir des ventes réelles (DVF).")
@@ -30,7 +37,7 @@ def main():
     print(f"{resultat['commune']} - {resultat['type_local']}, {resultat['surface']:g} m²")
     print(f"Fourchette estimée : {_euros(resultat['prix_bas'])} à {_euros(resultat['prix_haut'])}")
     print(f"Prix médian : {_euros(resultat['prix_median'])} ({resultat['prix_m2_median']:,.0f} €/m²)".replace(",", " "))
-    print(f"Basé sur {resultat['nombre_ventes']} ventes.")
+    print(f"Basé sur {resultat['nombre_ventes']} ventes {_periode(resultat)}.")
 
 
 if __name__ == "__main__":
