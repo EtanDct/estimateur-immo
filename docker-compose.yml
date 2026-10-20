@@ -1,0 +1,28 @@
+# Deux conteneurs : l'API, et Caddy devant elle (HTTPS automatique).
+# Lancement : docker compose up -d --build
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    volumes:
+      # Les données restent sur le serveur, en lecture seule : data/prix_communes.csv à côté de ce fichier.
+      - ./data:/app/data:ro
+    # Pas de "ports" : l'API n'est joignable que par Caddy, sur le réseau interne de Compose.
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"    # nécessaire à Let's Encrypt pour vérifier le domaine, et redirige vers HTTPS
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # les certificats : à conserver entre deux démarrages
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy   # Caddy démarre quand l'API répond sur /health
+
+volumes:
+  caddy_data:
+  caddy_config:

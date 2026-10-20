@@ -1,0 +1,6 @@
+# Liste blanche : seuls ces fichiers sont envoyés à Docker. Les données (data/), le venv
+# et l'historique Git n'entrent jamais dans l'image.
+*
+!api.py
+!immo.py
+!requirements-api.txt

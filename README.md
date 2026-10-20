@@ -65,7 +65,12 @@ estimateur-immo/
 ├── estimer.py            script : l'outil en ligne de commande
 ├── graphique.py          script : trace le graphique
 ├── api.py                l'API HTTP (FastAPI) : appelle immo.py pour le site
-├── requirements.txt      les bibliothèques à installer
+├── Dockerfile            l'image Docker de l'API (code seul, sans les données)
+├── .dockerignore         liste blanche des fichiers envoyés à Docker
+├── docker-compose.yml    lance l'API et Caddy (HTTPS) ensemble
+├── Caddyfile             configuration de Caddy : domaine et redirection vers l'API
+├── requirements.txt      toutes les bibliothèques du projet (développement)
+├── requirements-api.txt  seulement celles dont l'API a besoin (utilisé par le Dockerfile)
 └── README.md
 ```
 
@@ -239,6 +244,32 @@ aussi un 422, dont le détail est une liste (format standard de FastAPI).
 Le **CORS** limite les appels depuis un navigateur aux sites listés dans la variable
 d'environnement `ORIGINES_AUTORISEES` (séparés par des virgules). Par défaut :
 `https://www.tatane.me`, `https://tatane.me` et `http://localhost:4321`.
+
+### Dans Docker
+
+L'image contient le code (`api.py`, `immo.py`) et les bibliothèques de `requirements-api.txt`
+(pandas, FastAPI, uvicorn : environ 280 Mo, sans matplotlib ni scikit-learn). Elle ne contient
+**pas** les données : `data/prix_communes.csv` est monté au lancement, depuis le dossier du serveur
+où il a été déposé. Le serveur tourne avec un utilisateur sans droits (`appuser`), et un
+`HEALTHCHECK` interroge `/health`.
+
+```powershell
+docker build -t estimateur-immo-api .
+docker run -d --name estimateur-api -p 127.0.0.1:8000:8000 -v "${PWD}/data:/app/data:ro" estimateur-immo-api
+```
+
+- `-v ...:/app/data:ro` monte le dossier des données en **lecture seule**. Sans lui, le conteneur
+  refuse de démarrer et le dit.
+- `-p 127.0.0.1:8000:8000` ne rend l'API accessible que depuis la machine elle-même. Sur un
+  serveur, c'est le reverse proxy (Caddy) qui la publie en HTTPS : le port 8000 n'est jamais
+  ouvert sur Internet.
+- **En production**, `docker compose up -d --build` lance l'API et Caddy ensemble. Caddy est le
+  seul conteneur qui publie des ports (80 et 443) : il obtient et renouvelle le certificat HTTPS
+  de `api.tatane.me` et transmet les requêtes à l'API, qui n'est publiée nulle part. Les données
+  sont lues dans `./data`, à côté de `docker-compose.yml`.
+- `requirements-api.txt` est une liste minimale, épinglée. Après un changement de version dans
+  `requirements.txt`, la régénérer dans un environnement vierge qui ne contient que
+  `fastapi`, `uvicorn`, `pandas` et `numpy`.
 
 ## Choix de méthode
 

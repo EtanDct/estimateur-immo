@@ -1,0 +1,6 @@
+# Le nom de domaine suffit : Caddy obtient et renouvelle seul le certificat HTTPS.
+# "api" est le nom du service dans docker-compose.yml.
+api.tatane.me {
+	encode zstd gzip
+	reverse_proxy api:8000
+}
