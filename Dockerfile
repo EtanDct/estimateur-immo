@@ -26,4 +26,8 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 
 # 0.0.0.0 : le serveur écoute sur toutes les interfaces DU CONTENEUR. Ce qui est visible
 # depuis l'extérieur se décide au lancement avec -p (voir le README).
-CMD ["python", "-m", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+# --proxy-headers et --forwarded-allow-ips "*" : l'adresse du visiteur est lue dans l'en-tête
+# X-Forwarded-For que Caddy écrit, pour que la limite de requêtes s'applique à chaque visiteur
+# et non à Caddy. Sans danger ici : seul Caddy peut joindre ce conteneur (aucun port publié),
+# et il remplace toujours cet en-tête par l'adresse réelle du client.
+CMD ["python", "-m", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]

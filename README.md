@@ -243,7 +243,26 @@ aussi un 422, dont le détail est une liste (format standard de FastAPI).
 
 Le **CORS** limite les appels depuis un navigateur aux sites listés dans la variable
 d'environnement `ORIGINES_AUTORISEES` (séparés par des virgules). Par défaut :
-`https://www.tatane.me`, `https://tatane.me` et `http://localhost:4321`.
+`https://www.tatane.me`, `https://tatane.me` et `http://localhost:4321`. Ce n'est **pas** une
+protection d'accès : `curl` ou un script ignorent le CORS, qui n'empêche que l'usage de l'API par
+un autre site, depuis le navigateur de ses visiteurs.
+
+### Limite de requêtes
+
+Pour éviter qu'un visiteur ne sature le serveur, chaque adresse IP est limitée (bibliothèque
+`slowapi`) : **30 requêtes par minute** sur `/estimation`, **60 par minute** sur `/communes` et
+`/info` (un compteur par route et par visiteur). `/health` n'est pas limitée : le contrôle de
+santé de Docker l'appelle toutes les 30 secondes. Au-delà, l'API répond **429** avec
+`{"detail": "Trop de requêtes : réessayez dans une minute."}` et l'en-tête `Retry-After`. La
+réponse 429 porte aussi les en-têtes CORS, pour que le site puisse l'afficher.
+
+- Les seuils se règlent avec les variables d'environnement `LIMITE_ESTIMATION` et `LIMITE_DEFAUT`
+  (par exemple `30/minute`).
+- Les compteurs sont gardés en mémoire : ils repartent de zéro quand l'API redémarre.
+- Derrière Caddy, l'adresse du visiteur est lue dans l'en-tête `X-Forwarded-For` (options
+  `--proxy-headers` et `--forwarded-allow-ips` du `Dockerfile`). Sans cela, tous les visiteurs
+  partageraient l'adresse de Caddy, donc une seule limite. Falsifier cet en-tête ne contourne rien :
+  Caddy le remplace par l'adresse réelle du client, et l'API n'est joignable que par Caddy.
 
 ### Dans Docker
 
@@ -269,7 +288,7 @@ docker run -d --name estimateur-api -p 127.0.0.1:8000:8000 -v "${PWD}/data:/app/
   sont lues dans `./data`, à côté de `docker-compose.yml`.
 - `requirements-api.txt` est une liste minimale, épinglée. Après un changement de version dans
   `requirements.txt`, la régénérer dans un environnement vierge qui ne contient que
-  `fastapi`, `uvicorn`, `pandas` et `numpy`.
+  `fastapi`, `uvicorn`, `slowapi`, `pandas` et `numpy`.
 
 ## Choix de méthode
 
