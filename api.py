@@ -85,7 +85,15 @@ app.add_middleware(SlowAPIMiddleware)
 
 # Seul le site (et son serveur de développement) peut appeler l'API depuis un navigateur.
 # Pas de "*", et l'API ne fait que lire : seule la méthode GET est ouverte.
-app.add_middleware(CORSMiddleware, allow_origins=_origines_autorisees(), allow_methods=["GET"])
+# expose_headers : un navigateur ne montre au JavaScript que quelques en-têtes de réponse
+# courants. Retry-After (la durée d'attente après un 429) doit être listé pour que le site
+# puisse le lire.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_origines_autorisees(),
+    allow_methods=["GET"],
+    expose_headers=["Retry-After"],
+)
 
 
 @app.get("/health")

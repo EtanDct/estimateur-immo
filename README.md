@@ -254,7 +254,9 @@ Pour éviter qu'un visiteur ne sature le serveur, chaque adresse IP est limitée
 `/info` (un compteur par route et par visiteur). `/health` n'est pas limitée : le contrôle de
 santé de Docker l'appelle toutes les 30 secondes. Au-delà, l'API répond **429** avec
 `{"detail": "Trop de requêtes : réessayez dans une minute."}` et l'en-tête `Retry-After`. La
-réponse 429 porte aussi les en-têtes CORS, pour que le site puisse l'afficher.
+réponse 429 porte aussi les en-têtes CORS, pour que le site puisse l'afficher, et déclare
+`Retry-After` dans `Access-Control-Expose-Headers` : sans cela, le navigateur cache cet en-tête au
+JavaScript du site.
 
 - Les seuils se règlent avec les variables d'environnement `LIMITE_ESTIMATION` et `LIMITE_DEFAUT`
   (par exemple `30/minute`).
