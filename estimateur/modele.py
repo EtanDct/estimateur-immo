@@ -16,7 +16,7 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OrdinalEncoder
 
-from .config import DOSSIER_VILLES
+from .config import DOSSIER_VILLES, SURFACE_MAX, SURFACE_MIN
 from .estimation import ParametreInvalide, chercher_ligne_avec_repli, estimer
 
 # L'année de test : on entraîne sur les années d'avant, on teste sur celle-ci, comme en vrai
@@ -51,7 +51,9 @@ DISTANCE_MAX_DEGRES = 0.0135
 COS_LATITUDE = 0.69
 
 # Les surfaces refusées sont celles hors de ce que les ventes ont montré : entre ces deux centiles.
-CENTILES_SURFACE = (0.001, 0.999)
+# Au-delà, les ventes sont trop rares pour que le modèle y soit fiable : à Lille, le prix au m² d'un
+# appartement saute de 3 825 € (200 m²) à 4 314 € (250 m²) alors que les ventes ne le justifient pas.
+CENTILES_SURFACE = (0.005, 0.995)
 
 
 def charger_ventes(dossier=DOSSIER_VILLES):
@@ -195,8 +197,8 @@ def entrainer_modeles(ventes, regroupements=None, metriques=None):
     bas, haut = CENTILES_SURFACE
     surfaces = {
         type_local: (
-            math.floor(groupe["surface_reelle_bati"].quantile(bas)),
-            math.ceil(groupe["surface_reelle_bati"].quantile(haut)),
+            max(SURFACE_MIN, math.floor(groupe["surface_reelle_bati"].quantile(bas))),
+            min(SURFACE_MAX, math.ceil(groupe["surface_reelle_bati"].quantile(haut))),
         )
         for type_local, groupe in ventes.groupby("type_local")
     }

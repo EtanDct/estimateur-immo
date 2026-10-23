@@ -156,6 +156,8 @@ async def demarrage(app):
         app.state.info["modele"] = {
             "methodes": ["adresse", "commune", "mediane"],
             "entrainement": list(modeles["annees"]),
+            # Surfaces acceptées par type de bien, pour que le site les vérifie avant d'appeler.
+            "surfaces": {type_local: list(bornes) for type_local, bornes in modeles.get("surfaces", {}).items()},
             **modeles["metriques"].get("resume", {}),
         }
     yield
@@ -241,14 +243,14 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/communes", dependencies=[Depends(exiger_cle)])
+@app.api_route("/communes", methods=["GET", "HEAD"], dependencies=[Depends(exiger_cle)])
 def communes(request: Request, response: Response) -> list[str]:
     """Liste les communes connues, pour l'autocomplétion du formulaire."""
     response.headers["Cache-Control"] = CACHE_STATIQUE
     return request.app.state.communes
 
 
-@app.get("/info", dependencies=[Depends(exiger_cle)])
+@app.api_route("/info", methods=["GET", "HEAD"], dependencies=[Depends(exiger_cle)])
 def info(request: Request, response: Response) -> dict:
     """Indique la zone couverte : départements, villes, années des ventes, nombre de communes et mesures du modèle."""
     response.headers["Cache-Control"] = CACHE_STATIQUE
@@ -268,7 +270,7 @@ def estimation(
     request: Request,
     commune: Annotated[str, Query(description="Nom de la commune ou de l'arrondissement, par exemple Lyon ou Lyon 3e Arrondissement.")],
     type_local: Annotated[str, Query(description="Type de bien : Maison ou Appartement.")],
-    surface: Annotated[float, Query(description="Surface habitable en m², entre 9 et 1000 (le modèle refuse en plus les surfaces jamais vues dans les ventes).")],
+    surface: Annotated[float, Query(description="Surface habitable en m², entre 9 et 1000, et dans les bornes de son type de bien données par /info (modele.surfaces).")],
     latitude: Annotated[float | None, Query(description="Latitude de l'adresse du bien, avec longitude : estimation bien plus précise.")] = None,
     longitude: Annotated[float | None, Query(description="Longitude de l'adresse du bien, avec latitude.")] = None,
 ):

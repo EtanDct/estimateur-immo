@@ -263,7 +263,9 @@ Deux variantes sont déployées :
 **Contrôles de la demande.** Ils évitent des réponses d'apparence normale mais sans valeur :
 
 - **La surface** doit rester dans ce que les ventes ont montré pour ce type de bien (entre le
-  0,1e et le 99,9e centile : de 7 à 270 m² pour un appartement, de 20 à 402 m² pour une maison). Un arbre
+  0,5e et le 99,5e centile : de 10 à 200 m² pour un appartement, de 27 à 300 m² pour une maison ; `/info`
+  les donne dans `modele.surfaces`). Au-delà, les ventes sont trop rares : sans cette borne, le prix au m²
+  d'un appartement lillois sautait de 3 825 € à 200 m² à 4 314 € à 250 m². Un arbre
   de décision ne sait pas extrapoler : au-delà, il répéterait le prix de la dernière feuille. Dans
   tous les cas, la surface doit aussi être comprise entre 9 et 1 000 m².
 - **L'adresse** est rattachée à une commune par ses ventes voisines : on regarde les 10 ventes les
