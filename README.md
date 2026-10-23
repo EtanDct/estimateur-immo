@@ -334,7 +334,9 @@ L'image contient le code (`api.py`, `modele.py`, `immo.py`) et les bibliothèque
 `requirements-api.txt` (pandas, scikit-learn, FastAPI, uvicorn : environ 480 Mo). Elle ne contient
 **pas** les données : `prix_communes.csv` et `modeles.joblib` sont montés au lancement, depuis le
 dossier du serveur où ils ont été déposés. Le serveur tourne avec un utilisateur sans droits
-(`appuser`), et un `HEALTHCHECK` interroge `/health`.
+(`appuser`), et un `HEALTHCHECK` interroge `/health`. Les requêtes ne sont **pas journalisées**
+(`--no-access-log`) : elles contiennent la position des biens estimés, une donnée personnelle que
+rien ne justifie de conserver.
 
 ```powershell
 docker build -t estimateur-immo-api .

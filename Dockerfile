@@ -31,4 +31,6 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 # X-Forwarded-For que Caddy écrit, pour que la limite de requêtes s'applique à chaque visiteur
 # et non à Caddy. Sans danger ici : seul Caddy peut joindre ce conteneur (aucun port publié),
 # et il remplace toujours cet en-tête par l'adresse réelle du client.
-CMD ["python", "-m", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# --no-access-log : les requêtes ne sont pas journalisées. Elles contiennent la position du bien
+# estimé (latitude, longitude), une donnée personnelle qu'il n'y a aucune raison de conserver.
+CMD ["python", "-m", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*", "--no-access-log"]
