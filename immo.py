@@ -5,8 +5,11 @@ tout en paramètres : il renvoie des valeurs ou lève des exceptions. Les script
 (explorer.py, estimer.py, graphique.py) et l'API (api.py) décident de l'affichage.
 """
 
+import gzip
 import logging
 import unicodedata
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pandas as pd
@@ -53,6 +56,42 @@ class BienIntrouvable(ValueError):
     """Aucune estimation possible : commune inconnue, ou pas assez de ventes de ce type de bien."""
 
 
+# Les fichiers DVF géolocalisés, un par département et par année, publiés sur data.gouv.fr.
+URL_DVF = "https://files.data.gouv.fr/geo-dvf/latest/csv/{annee}/departements/{departement}.csv.gz"
+
+
+def telecharger(departement, annees=ANNEES, dossier=DATA_DIR):
+    """Télécharge les fichiers DVF d'un département vers <dossier>/<departement> <annee>.csv.
+
+    Un fichier déjà présent n'est pas retéléchargé. Renvoie la liste des fichiers écrits.
+    Lève une FileNotFoundError si data.gouv.fr n'a pas le fichier : l'Alsace-Moselle (57, 67, 68)
+    et Mayotte ne sont pas couvertes par DVF.
+    """
+    dossier = Path(dossier)
+    dossier.mkdir(parents=True, exist_ok=True)
+    ecrits = []
+    for annee in annees:
+        chemin = dossier / f"{departement} {annee}.csv"
+        if chemin.exists():
+            continue
+        url = URL_DVF.format(annee=annee, departement=departement)
+        try:
+            with urllib.request.urlopen(url, timeout=120) as reponse:
+                contenu = gzip.decompress(reponse.read())
+        except urllib.error.HTTPError as erreur:
+            raise FileNotFoundError(
+                f"{url} est introuvable (HTTP {erreur.code}) : ce département n'est peut-être pas couvert par DVF."
+            ) from erreur
+        # Écrit sous un nom provisoire puis renomme : un téléchargement interrompu ne laisse
+        # jamais un fichier tronqué que charger() prendrait pour un fichier complet.
+        provisoire = chemin.with_name(chemin.name + ".part")
+        provisoire.write_bytes(contenu)
+        provisoire.replace(chemin)
+        journal.info("Téléchargé : %s (%.1f Mo)", chemin.name, len(contenu) / 1_000_000)
+        ecrits.append(chemin)
+    return ecrits
+
+
 def charger(departement, annees=ANNEES, dossier=DATA_DIR):
     """Lit les fichiers <dossier>/<departement> <annee>.csv et les empile en un seul tableau brut.
 
@@ -77,11 +116,16 @@ def _noter(etape, avant, apres):
     journal.info("%s : %d lignes retirées, il en reste %d", etape, avant - apres, apres)
 
 
-def nettoyer(df, prix_m2_min=PRIX_M2_MIN, prix_m2_max=PRIX_M2_MAX):
+def nettoyer(df, prix_m2_min=PRIX_M2_MIN, prix_m2_max=PRIX_M2_MAX, ecart_median=None):
     """Garde les ventes d'un seul logement (maison ou appartement) au prix au m² plausible.
 
     Renvoie un nouveau tableau avec une colonne prix_m2 en plus. Le tableau d'origine
     n'est pas modifié. Ce que retire chaque étape est noté dans le journal (niveau INFO).
+
+    ecart_median : si renseigné (par exemple 3), retire aussi les ventes dont le prix au m² sort de
+    l'intervalle [médiane / 3, médiane x 3] de leur commune et de leur type de bien. Des seuils
+    fixes ne conviennent pas quand les prix varient beaucoup d'une ville à l'autre : 10 000 €/m²
+    est une valeur aberrante dans la Marne, et un prix courant à Paris.
     """
     journal.info("Départ : %d lignes", len(df))
 
@@ -122,6 +166,14 @@ def nettoyer(df, prix_m2_min=PRIX_M2_MIN, prix_m2_max=PRIX_M2_MAX):
     df = df[df["prix_m2"].between(prix_m2_min, prix_m2_max)]
     _noter(f"5. Prix au m² entre {prix_m2_min} et {prix_m2_max}", avant, len(df))
 
+    # 6. Facultatif : un prix au m² proche de celui des autres ventes de la même commune.
+    #    transform("median") donne à chaque ligne la médiane de son groupe (une commune, un type).
+    if ecart_median is not None:
+        avant = len(df)
+        mediane = df.groupby(["code_commune", "type_local"])["prix_m2"].transform("median")
+        df = df[df["prix_m2"].between(mediane / ecart_median, mediane * ecart_median)]
+        _noter(f"6. Prix au m² à moins de x{ecart_median:g} de la médiane de la commune", avant, len(df))
+
     # Les filtres laissent des numéros de ligne "troués" : on renumérote de 0 à n-1.
     return df.reset_index(drop=True)
 
@@ -149,6 +201,22 @@ def prix_par_commune(df):
     ).reset_index()  # remet commune, nom et type en colonnes (ils étaient dans l'index)
 
     return stats
+
+
+def regrouper_communes(df, regroupements):
+    """Ajoute les ventes de communes réunies sous un seul nom : Paris en entier, par exemple.
+
+    regroupements : {code: (nom, [codes des communes à réunir])}. Pour chaque regroupement, les
+    ventes de ces communes sont copiées avec le code et le nom du regroupement. Les ventes
+    d'origine sont conservées : on obtient donc les arrondissements ET la ville.
+    """
+    reunies = []
+    for code, (nom, codes) in regroupements.items():
+        ventes = df[df["code_commune"].isin(codes)].copy()
+        ventes["code_commune"] = code
+        ventes["nom_commune"] = nom
+        reunies.append(ventes)
+    return pd.concat([df, *reunies], ignore_index=True)
 
 
 def charger_prix_communes(dossier=DATA_DIR):
