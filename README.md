@@ -7,7 +7,7 @@ de machine learning (scikit-learn) dont l'erreur est mesurée sur des ventes qu'
 et comparée à une simple médiane par commune.
 
 ```powershell
-python estimer.py --commune "Lyon 3e Arrondissement" --type Appartement --surface 65 --latitude 45.7578 --longitude 4.8520
+python -m estimateur estimer --commune "Lyon 3e Arrondissement" --type Appartement --surface 65 --latitude 45.7578 --longitude 4.8520
 ```
 
 ```
@@ -53,18 +53,18 @@ Ce que ces mesures montrent :
 
 ```
  data/villes/75 2021.csv … 75 2025.csv     (un fichier DVF par département et par année,
- data/villes/13 2021.csv … 13 2025.csv      téléchargés par construire.py : 10 départements)
+ data/villes/13 2021.csv … 13 2025.csv      téléchargés par la commande construire : 10 départements)
               │
-              │  python construire.py   telecharger → charger → nettoyer → regrouper_communes → prix_par_commune
+              │  construire   telecharger → charger → nettoyer → regrouper_communes → prix_par_commune
               ▼
  data/villes/ventes_propres.csv   (432 579 ventes, une ligne par vente)     data/villes/prix_communes.csv   (statistiques par commune)
               │                                                                          │
-              │  python evaluer.py   (mesure les modèles, écrit evaluation.json)         │
-              │  python modeliser.py (entraîne les modèles finaux)                       │
+              │  evaluer    (mesure les modèles, écrit evaluation.json)                  │
+              │  modeliser  (entraîne les modèles finaux)                                │
               ▼                                                                          │
  data/villes/modeles.joblib ───────────────────────────────────────────────┐            │
                                                                             ▼            ▼
-                                                   estimer.py (terminal) · api.py (HTTP) · graphique.py
+                                                   estimer (terminal) · api (HTTP) · graphique
 ```
 
 Les fichiers d'origine ne sont **jamais modifiés** : les fonctions travaillent sur des copies en
@@ -74,51 +74,58 @@ mémoire. `data/` est ignoré par Git.
 
 ```
 estimateur-immo/
-├── data/                  données, ignorées par Git (sous-dossier villes/ : celles du projet)
-├── docs/                  le graphique
+├── estimateur/              le paquet Python : tout le code
+│   ├── config.py            chemins et constantes partagés (seuils, types de biens, dossiers)
+│   ├── donnees.py           LES DONNÉES : télécharger, charger, nettoyer, agréger
+│   ├── estimation.py        L'ESTIMATION PAR MÉDIANE : vérifier une demande, trouver la commune, erreurs
+│   ├── modele.py            LE MODÈLE : séparation par année, référence, entraînement, mesures, estimation
+│   ├── villes.py            la liste des dix villes, avec leurs codes de commune
+│   ├── api.py               l'API HTTP (FastAPI) : appelle estimation.py et modele.py pour le site
+│   ├── cli.py               le point d'entrée en ligne de commande : python -m estimateur <commande>
+│   └── commandes/           une commande par module
+│       ├── construire.py    télécharge et prépare les données
+│       ├── evaluer.py       compare les modèles à la référence sur 2025
+│       ├── modeliser.py     entraîne et enregistre les modèles finaux
+│       ├── estimer.py       estime le prix d'un bien
+│       ├── graphique.py     trace le graphique
+│       └── explorer.py      explore les fichiers DVF d'un département (diagnostics)
+├── data/                    données, ignorées par Git (sous-dossier villes/ : celles du projet)
+├── docs/                    le graphique
 │
-├── immo.py                LA LOGIQUE des données : télécharger, charger, nettoyer, agréger, estimer par médiane
-├── modele.py              LA LOGIQUE du modèle : séparation par année, référence, entraînement, mesures, estimation
-├── villes.py              la liste des dix villes, avec leurs codes de commune
-│
-├── construire.py          script : télécharge et prépare les données
-├── evaluer.py             script : compare les modèles à la référence sur 2025
-├── modeliser.py           script : entraîne et enregistre les modèles finaux
-├── estimer.py             script : l'outil en ligne de commande
-├── graphique.py           script : trace le graphique
-├── explorer.py            script : explore les fichiers DVF d'un département (diagnostics)
-├── api.py                 l'API HTTP (FastAPI) : appelle modele.py et immo.py pour le site
-│
-├── Dockerfile             l'image Docker de l'API (code seul, sans les données)
-├── .dockerignore          liste blanche des fichiers envoyés à Docker
-├── docker-compose.yml     lance l'API et Caddy (HTTPS) ensemble
-├── Caddyfile              configuration de Caddy : domaine et redirection vers l'API
-├── requirements.txt       toutes les bibliothèques du projet (développement)
-├── requirements-api.txt   seulement celles dont l'API a besoin (utilisé par le Dockerfile)
+├── pyproject.toml           métadonnées du projet et commande installable `estimateur`
+├── requirements.txt         toutes les bibliothèques du projet (développement)
+├── requirements-api.txt     seulement celles dont l'API a besoin (utilisé par le Dockerfile)
+├── Dockerfile               l'image Docker de l'API (code seul, sans les données)
+├── .dockerignore            liste blanche des fichiers envoyés à Docker
+├── docker-compose.yml       lance l'API et Caddy (HTTPS) ensemble
+├── Caddyfile                configuration de Caddy : domaine et redirection vers l'API
+├── .env.example             modèle du fichier .env du serveur (clés d'API)
 └── README.md
 ```
 
 ```
- construire.py ─┐
- evaluer.py ────┤
- modeliser.py ──┼── importent immo.py, modele.py et villes.py
- estimer.py ────┤
- graphique.py ──┤
- api.py ────────┘
+ commandes/*  (terminal)  ─┐
+ api.py       (HTTP)      ─┴──► modele.py ──► estimation.py ──► config.py
+                                    │                ▲
+                                    └──► donnees.py ─┘   villes.py
 ```
 
-- **`immo.py` et `modele.py` font le travail.** Ils contiennent les fonctions, et seulement elles.
-  Ils ne lisent pas d'arguments de terminal et ne font ni `print`, ni `input`, ni `sys.exit` : ils
-  reçoivent des paramètres et renvoient des valeurs ou lèvent des exceptions. Les départements, les
-  années, les dossiers et les seuils sont des paramètres.
-- **Les scripts et l'API sont des « façades ».** Chacun lit ses entrées (arguments du terminal,
-  requête HTTP, constantes), appelle ces fonctions et présente le résultat. Ils n'ont aucune
-  logique de calcul propre.
+- **`donnees.py`, `estimation.py` et `modele.py` font le travail.** Ils contiennent les fonctions, et
+  seulement elles. Ils ne lisent pas d'arguments de terminal et ne font ni `print`, ni `input`, ni
+  `sys.exit` : ils reçoivent des paramètres et renvoient des valeurs ou lèvent des exceptions. Les
+  départements, les années, les dossiers et les seuils sont des paramètres.
+- **Les commandes et l'API sont des « façades ».** Chacune lit ses entrées (arguments du terminal,
+  requête HTTP), appelle ces fonctions et présente le résultat. Elles n'ont aucune logique de calcul
+  propre. Une commande est un module qui définit `ajouter_arguments(parser)` et `executer(args)` ;
+  `cli.py` ne l'importe que si on la lance.
 - **Pourquoi cette séparation :** la logique est écrite une seule fois, le terminal et l'API la
   partagent, et les erreurs sont des exceptions que chaque façade traduit à sa manière (un message
   dans le terminal, un code HTTP 404, 422 ou 429 pour l'API).
+- **Pourquoi un paquet :** les modules s'importent avec des chemins stables (`from estimateur.modele
+  import ...`), quel que soit le dossier d'où on lance Python. Les chemins viennent de `config.py` et
+  ne dépendent jamais du dossier courant.
 
-## Les données
+## Les données DVF
 
 - Source : DVF géolocalisées sur data.gouv.fr, un fichier CSV par département et par année.
   `telecharger()` les récupère (environ 100 Mo compressés pour dix départements et cinq ans).
@@ -134,7 +141,7 @@ estimateur-immo/
   `code_commune`, `nom_commune`, `type_local`, `surface_reelle_bati`, `nombre_pieces_principales`,
   `surface_terrain`, `latitude`, `longitude`.
 
-## Les fonctions de `immo.py`
+## Préparer les données (`donnees.py`)
 
 ### `telecharger(departement, annees=(2023, 2024, 2025), dossier=data/)`
 
@@ -170,7 +177,7 @@ note dans le journal (`logging`, niveau INFO) combien de lignes elle retire :
    [médiane / `ecart_median`, médiane × `ecart_median`] de leur commune et de leur type de bien.
    Des seuils fixes ne conviennent pas à des villes aux prix très différents : 10 000 €/m² est une
    valeur aberrante dans la Marne et un prix courant à Paris, où un plafond à 10 000 aurait retiré
-   45 % des ventes. `construire.py` utilise un plafond de garde-fou à 50 000 et un écart de 3.
+   45 % des ventes. La commande `construire` utilise un plafond de garde-fou à 50 000 et un écart de 3.
 
 Renvoie un nouveau tableau avec une colonne `prix_m2` en plus.
 
@@ -182,12 +189,14 @@ arrondissements. Les ventes d'origine sont conservées.
 ### `prix_par_commune(df)`
 
 Pour chaque commune et chaque type de bien : médiane, 1er et 3e quartile du prix au m², nombre de
-ventes, première et dernière année. Les statistiques de `construire.py` portent sur 2024 et 2025.
+ventes, première et dernière année. Les statistiques de la commande `construire` portent sur 2024 et 2025.
 
 ### `charger_prix_communes(dossier=data/)`
 
 Relit `prix_communes.csv`. Si le fichier n'existe pas, lève une `FileNotFoundError` qui indique
 comment le générer.
+
+## Estimer par médiane (`estimation.py`)
 
 ### `chercher_ligne(...)` et `estimer(prix, commune, type_local, surface, ventes_min=10)`
 
@@ -244,7 +253,7 @@ Une adresse est refusée (422) si elle ne se trouve pas dans la zone des ventes 
 (marge de 3 km) : une adresse de Bordeaux pour la commune de Lille, par exemple. La règle des 10
 ventes minimum de la commune et du type de bien s'applique aussi avec une adresse.
 
-**Protocole d'évaluation** (`evaluer.py`) :
+**Protocole d'évaluation** (commande `evaluer`) :
 
 - **Séparation temporelle.** Entraînement sur 2021 à 2024, test sur 2025 : on prédit l'avenir à
   partir du passé, jamais l'inverse, et jamais un tirage au hasard qui mélangerait les années.
@@ -258,36 +267,41 @@ ventes minimum de la commune et du type de bien s'applique aussi avec une adress
   local.
 
 Les mesures sont écrites dans `data/villes/evaluation.json`, gardées avec le modèle et affichées
-par l'API (`/info`). Le modèle final (`modeliser.py`) est ensuite entraîné sur toutes les années,
+par l'API (`/info`). Le modèle final (commande `modeliser`) est ensuite entraîné sur toutes les années,
 2025 comprise.
 
-## Les scripts
+## Les commandes
+
+Toutes se lancent depuis la racine du projet avec `python -m estimateur <commande>`. Après
+`python -m pip install -e .`, la commande `estimateur <commande>` fait la même chose.
 
 ```powershell
-python construire.py     # télécharge, nettoie, agrège : ventes_propres.csv et prix_communes.csv
-python evaluer.py        # compare les modèles à la référence sur 2025 : evaluation.json
-python modeliser.py      # entraîne les modèles finaux : modeles.joblib
-python estimer.py --commune Lyon --type Appartement --surface 65
-python estimer.py -h
-python graphique.py      # docs/villes_les_plus_cheres.png
+python -m estimateur                    # liste les commandes
+python -m estimateur construire         # télécharge, nettoie, agrège : ventes_propres.csv et prix_communes.csv
+python -m estimateur evaluer            # compare les modèles à la référence sur 2025 : evaluation.json
+python -m estimateur modeliser          # entraîne les modèles finaux : modeles.joblib
+python -m estimateur estimer --commune Lyon --type Appartement --surface 65
+python -m estimateur estimer -h         # les options de chaque commande
+python -m estimateur graphique          # docs/villes_les_plus_cheres.png
+python -m estimateur explorer 75 --annees 2025
 ```
 
-`estimer.py` accepte aussi `--latitude` et `--longitude`. En cas d'erreur, le message est affiché
-sur la sortie d'erreur et le code de retour vaut 1, sans trace d'erreur Python.
+`estimer` accepte aussi `--latitude` et `--longitude`. En cas d'erreur, le message est affiché sur la
+sortie d'erreur et le code de retour vaut 1, sans trace d'erreur Python.
 
-`explorer.py` sert à explorer les fichiers DVF d'un département (taille, colonnes, types de biens,
-cases vides) et à voir ce que retire chaque étape du nettoyage.
+`explorer` sert à examiner les fichiers DVF d'un département (taille, colonnes, types de biens, cases
+vides) et à voir ce que retire chaque étape du nettoyage. Il n'écrit aucun fichier.
 
 ## L'API
 
-`api.py` expose les fonctions de `modele.py` et `immo.py` en HTTP, pour le site. Elle ne contient
+`estimateur/api.py` expose les fonctions de `modele.py` et `estimation.py` en HTTP, pour le site. Elle ne contient
 aucune logique métier : elle traduit les requêtes en appels et les résultats en réponses JSON.
 `prix_communes.csv` et `modeles.joblib` sont lus **une seule fois**, au démarrage. Si
 `prix_communes.csv` manque, le serveur refuse de démarrer avec un message clair ; si
 `modeles.joblib` manque, il démarre et répond avec les médianes seules.
 
 ```powershell
-python -m uvicorn api:app --reload      # http://127.0.0.1:8000, documentation sur /docs
+python -m uvicorn estimateur.api:app --reload      # http://127.0.0.1:8000, documentation sur /docs
 ```
 
 | Route | Réponse |
@@ -360,7 +374,7 @@ JavaScript du site.
 
 ### Dans Docker
 
-L'image contient le code (`api.py`, `modele.py`, `immo.py`) et les bibliothèques de
+L'image contient le paquet `estimateur/` (le code) et les bibliothèques de
 `requirements-api.txt` (pandas, scikit-learn, FastAPI, uvicorn : environ 480 Mo). Elle ne contient
 **pas** les données : `prix_communes.csv` et `modeles.joblib` sont montés au lancement, depuis le
 dossier du serveur où ils ont été déposés. Le serveur tourne avec un utilisateur sans droits
@@ -435,20 +449,23 @@ Prérequis : Python 3.12 ou plus. Commandes pour PowerShell, depuis la racine du
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-python construire.py
-python evaluer.py
-python modeliser.py
-python estimer.py --commune Lyon --type Appartement --surface 65
+python -m estimateur construire
+python -m estimateur evaluer
+python -m estimateur modeliser
+python -m estimateur estimer --commune Lyon --type Appartement --surface 65
 ```
+
+Facultatif : `python -m pip install -e .` installe le paquet en mode développement et ajoute la
+commande `estimateur` (équivalente à `python -m estimateur`).
 
 Depuis du code Python, les fonctions s'utilisent directement :
 
 ```python
-from immo import DATA_DIR, charger_prix_communes
-from modele import charger_modeles, estimer_prix
+from estimateur.config import DOSSIER_VILLES
+from estimateur.donnees import charger_prix_communes
+from estimateur.modele import charger_modeles, estimer_prix
 
-dossier = DATA_DIR / "villes"
-print(estimer_prix(charger_prix_communes(dossier), charger_modeles(dossier), "Lyon", "Appartement", 65))
+print(estimer_prix(charger_prix_communes(DOSSIER_VILLES), charger_modeles(DOSSIER_VILLES), "Lyon", "Appartement", 65))
 ```
 
 ## Suite prévue

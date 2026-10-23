@@ -1,4 +1,4 @@
-# Image de l'API. Elle contient le code (api.py, immo.py, modele.py) mais PAS les données :
+# Image de l'API. Elle contient le paquet estimateur/ (le code) mais PAS les données :
 # prix_communes.csv et modeles.joblib sont montés depuis le serveur au lancement (voir le README).
 FROM python:3.15-slim
 
@@ -13,7 +13,7 @@ WORKDIR /app
 COPY requirements-api.txt .
 RUN pip install --no-cache-dir -r requirements-api.txt
 
-COPY immo.py modele.py api.py ./
+COPY estimateur/ ./estimateur/
 
 # Un utilisateur sans droits particuliers : le serveur ne tourne pas en root.
 RUN useradd --system --no-create-home appuser
@@ -33,4 +33,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 # et il remplace toujours cet en-tête par l'adresse réelle du client.
 # --no-access-log : les requêtes ne sont pas journalisées. Elles contiennent la position du bien
 # estimé (latitude, longitude), une donnée personnelle qu'il n'y a aucune raison de conserver.
-CMD ["python", "-m", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*", "--no-access-log"]
+CMD ["python", "-m", "uvicorn", "estimateur.api:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*", "--no-access-log"]

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "estimateur-immo"
+version = "0.1.0"
+description = "Estimation du prix d'un bien dans les dix plus grandes villes de France, à partir des ventes DVF."
+readme = "README.md"
+requires-python = ">=3.12"
+# Les versions exactes testées sont dans requirements.txt (développement) et requirements-api.txt (API).
+dependencies = [
+    "pandas>=3.0",
+    "numpy>=2.5",
+    "scikit-learn>=1.9",
+    "joblib>=1.6",
+    "matplotlib>=3.11",
+    "fastapi>=0.151",
+    "uvicorn>=0.54",
+    "slowapi>=0.1.10",
+]
+
+[project.scripts]
+estimateur = "estimateur.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["estimateur*"]

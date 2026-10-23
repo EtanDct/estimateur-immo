@@ -42,6 +42,6 @@ def codes_du_departement(departement):
 def regroupements():
     """Renvoie les villes découpées en arrondissements : {code INSEE: (nom, codes des arrondissements)}.
 
-    À donner à immo.regrouper_communes() pour que « Paris » existe aussi en entier.
+    À donner à donnees.regrouper_communes() pour que « Paris » existe aussi en entier.
     """
     return {code_ville: (nom, codes) for nom, (_, code_ville, codes) in VILLES.items() if len(codes) > 1}

@@ -1,19 +1,18 @@
 """Trace le prix médian au m² des dix grandes villes et l'enregistre dans docs/.
 
-À lancer depuis la racine du projet, après construire.py : python graphique.py
+À lancer après la commande construire : python -m estimateur graphique
 """
-
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
-from immo import DATA_DIR, VENTES_MIN, charger_prix_communes, classer_communes
-from villes import VILLES
+from ..config import DOCS_DIR, DOSSIER_VILLES, VENTES_MIN
+from ..donnees import charger_prix_communes
+from ..estimation import classer_communes
+from ..villes import VILLES
 
 NB_COMMUNES = len(VILLES)
-DOSSIER = DATA_DIR / "villes"  # là où construire.py écrit prix_communes.csv
-SORTIE = Path(__file__).parent / "docs" / "villes_les_plus_cheres.png"
+SORTIE = DOCS_DIR / "villes_les_plus_cheres.png"
 
 # Couleurs : une seule teinte pour l'ordre de grandeur, le reste en gris discrets.
 SURFACE = "#fcfcfb"
@@ -23,8 +22,6 @@ ENCRE_DISCRETE = "#898781"
 GRILLE = "#e1e0d9"
 AXE = "#c3c2b7"
 BARRE = "#2a78d6"
-
-plt.rcParams["font.family"] = ["Segoe UI", "DejaVu Sans"]
 
 
 def _milliers(valeur):
@@ -56,8 +53,15 @@ def _tracer(ax, classement, titre):
     ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: _milliers(v)))
 
 
-def main():
-    prix = charger_prix_communes(DOSSIER)
+def ajouter_arguments(parser):
+    """Cette commande n'a pas d'option."""
+
+
+def executer(args):
+    """Lit prix_communes.csv, trace les deux classements et écrit l'image."""
+    plt.rcParams["font.family"] = ["Segoe UI", "DejaVu Sans"]
+
+    prix = charger_prix_communes(DOSSIER_VILLES)
     # Une ligne par ville : le code INSEE de la ville (« Paris » entière, pas ses arrondissements).
     prix = prix[prix["code_commune"].isin([code_ville for _, code_ville, _ in VILLES.values()])]
 
@@ -89,7 +93,3 @@ def main():
     SORTIE.parent.mkdir(exist_ok=True)
     fig.savefig(SORTIE, dpi=160, facecolor=SURFACE)
     print(f"Graphique enregistré : {SORTIE}")
-
-
-if __name__ == "__main__":
-    main()

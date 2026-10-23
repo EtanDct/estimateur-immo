@@ -1,9 +1,9 @@
-"""API HTTP de l'estimateur : expose les fonctions de immo.py au site.
+"""API HTTP de l'estimateur : expose les fonctions du paquet au site.
 
-Ce module ne contient aucune logique métier : il reçoit les requêtes, appelle immo.py
-et traduit les résultats et les erreurs en réponses HTTP.
+Ce module ne contient aucune logique métier : il reçoit les requêtes, appelle estimation.py et
+modele.py et traduit les résultats et les erreurs en réponses HTTP.
 
-À lancer depuis la racine du projet : python -m uvicorn api:app --reload
+À lancer depuis la racine du projet : python -m uvicorn estimateur.api:app --reload
 Documentation interactive : http://127.0.0.1:8000/docs
 
 Variables d'environnement (facultatives) :
@@ -29,8 +29,10 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
-from immo import DATA_DIR, BienIntrouvable, ParametreInvalide, charger_prix_communes, noms_communes, zone_couverte
-from modele import charger_modeles, estimer_prix
+from .config import DOSSIER_VILLES
+from .donnees import charger_prix_communes
+from .estimation import BienIntrouvable, ParametreInvalide, noms_communes, zone_couverte
+from .modele import charger_modeles, estimer_prix
 
 ORIGINES_PAR_DEFAUT = "https://www.tatane.me,https://tatane.me,http://localhost:4321"
 
@@ -100,7 +102,7 @@ async def demarrage(app):
     requête. Si modeles.joblib manque, il démarre quand même et répond avec les médianes seules
     (méthode "mediane") : le code peut être mis en ligne avant le fichier du modèle.
     """
-    dossier = Path(os.environ.get("DOSSIER_DONNEES", DATA_DIR / "villes"))
+    dossier = Path(os.environ.get("DOSSIER_DONNEES", DOSSIER_VILLES))
     prix = charger_prix_communes(dossier)
     modeles = charger_modeles(dossier)
     app.state.prix = prix

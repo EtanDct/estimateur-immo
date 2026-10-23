@@ -1,6 +1,6 @@
 """Modèle de prix au m² : séparation par année, référence, entraînement et mesure de l'erreur.
 
-Comme immo.py, ce module n'affiche rien : evaluer.py l'appelle et présente les résultats.
+Comme donnees.py, ce module n'affiche rien : la commande evaluer l'appelle et présente les résultats.
 """
 
 import math
@@ -14,7 +14,8 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OrdinalEncoder
 
-from immo import DATA_DIR, ParametreInvalide, chercher_ligne, estimer
+from .config import DOSSIER_VILLES
+from .estimation import ParametreInvalide, chercher_ligne, estimer
 
 # L'année de test : on entraîne sur les années d'avant, on teste sur celle-ci, comme en vrai
 # (le modèle prédit l'avenir à partir du passé).
@@ -40,8 +41,8 @@ FICHIER_MODELES = "modeles.joblib"
 MARGE_DEGRES = 0.03
 
 
-def charger_ventes(dossier=DATA_DIR / "villes"):
-    """Lit <dossier>/ventes_propres.csv, le fichier écrit par construire.py."""
+def charger_ventes(dossier=DOSSIER_VILLES):
+    """Lit <dossier>/ventes_propres.csv, le fichier écrit par la commande construire."""
     return pd.read_csv(dossier / "ventes_propres.csv", dtype={"code_commune": str}, low_memory=False)
 
 
@@ -137,7 +138,7 @@ def mesurer_fourchette(reel, bas, haut):
 def zones_communes(ventes, regroupements=None):
     """Calcule, pour chaque commune, la zone (latitude et longitude min et max) de ses ventes.
 
-    regroupements : comme pour immo.regrouper_communes(), pour que « Paris » ait aussi sa zone.
+    regroupements : comme pour donnees.regrouper_communes(), pour que « Paris » ait aussi sa zone.
     Renvoie {code_commune: (lat_min, lat_max, lon_min, lon_max)}.
     """
     zones = {}
@@ -154,7 +155,7 @@ def entrainer_modeles(ventes, regroupements=None, metriques=None):
 
     Deux modèles, chacun en trois exemplaires (25e centile, médiane, 75e centile) :
     « commune » (commune, type, surface, année) et « adresse » (type, surface, année, position).
-    metriques : les mesures de evaluer.py, gardées avec les modèles pour être affichées.
+    metriques : les mesures de la commande evaluer, gardées avec les modèles pour être affichées.
     """
     annee = int(ventes["annee"].max())
     return {
@@ -168,16 +169,16 @@ def entrainer_modeles(ventes, regroupements=None, metriques=None):
     }
 
 
-def enregistrer_modeles(modeles, dossier=DATA_DIR):
+def enregistrer_modeles(modeles, dossier=DOSSIER_VILLES):
     """Écrit les modèles dans <dossier>/modeles.joblib."""
     joblib.dump(modeles, Path(dossier) / FICHIER_MODELES, compress=3)
 
 
-def charger_modeles(dossier=DATA_DIR):
+def charger_modeles(dossier=DOSSIER_VILLES):
     """Lit <dossier>/modeles.joblib. Renvoie None si le fichier n'existe pas.
 
     Le fichier est lu avec pickle (via joblib), qui peut exécuter du code : ne charger que
-    un fichier produit par modeliser.py et déposé par soi-même sur le serveur.
+    un fichier produit par la commande modeliser et déposé par soi-même sur le serveur.
     """
     chemin = Path(dossier) / FICHIER_MODELES
     return joblib.load(chemin) if chemin.exists() else None
@@ -188,11 +189,11 @@ def estimer_prix(prix, modeles, commune, type_local, surface, latitude=None, lon
 
     - latitude et longitude donnés (l'adresse du bien) : le modèle « adresse », méthode "adresse".
     - sinon, une commune que le modèle connaît : le modèle « commune », méthode "commune".
-    - sinon (« Paris » en entier, ou pas de modèle) : les médianes et quartiles de immo.estimer(),
+    - sinon (« Paris » en entier, ou pas de modèle) : les médianes et quartiles de estimation.estimer(),
       méthode "mediane".
-    Renvoie le même dictionnaire que immo.estimer(), plus la clé methode. Les ventes comptées
+    Renvoie le même dictionnaire que estimation.estimer(), plus la clé methode. Les ventes comptées
     (nombre_ventes, annee_min, annee_max) sont celles des statistiques de la commune.
-    Lève les mêmes ValueError que immo.estimer(), et ParametreInvalide si une seule des deux
+    Lève les mêmes ValueError que estimation.estimer(), et ParametreInvalide si une seule des deux
     coordonnées est donnée, si elles sont invalides, ou si l'adresse n'est pas dans la commune.
     """
     if (latitude is None) != (longitude is None):

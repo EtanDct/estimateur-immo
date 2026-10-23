@@ -1,25 +1,21 @@
 """Compare les modèles à la référence (médiane par commune) sur les ventes de la dernière année.
 
 On entraîne sur les années d'avant et on teste sur la dernière : le modèle ne voit jamais le prix
-des ventes qu'il doit estimer. Les données viennent de construire.py. Les mesures sont aussi
-écrites dans data/villes/evaluation.json, pour modeliser.py.
-
-À lancer depuis la racine du projet : python evaluer.py
+des ventes qu'il doit estimer. Les données viennent de la commande construire. Les mesures sont
+aussi écrites dans data/villes/evaluation.json, pour la commande modeliser.
 """
 
 import json
 
 import pandas as pd
 
-from immo import DATA_DIR
-from modele import (
+from ..config import DOSSIER_VILLES
+from ..modele import (
     ANNEE_TEST, VARIABLES_ADRESSE, VARIABLES_COMMUNE, VARIABLES_COMPLET, VARIABLES_PIECES,
     charger_ventes, entrainer, mesurer_erreur, mesurer_fourchette,
     predire_par_groupe, separer_par_annee,
 )
-from villes import VILLE_DE
-
-DOSSIER = DATA_DIR / "villes"
+from ..villes import VILLE_DE
 
 REFERENCE = "Référence : médiane de toutes les années"
 REFERENCE_RECENTE = "Référence : médiane de la dernière année"
@@ -44,7 +40,12 @@ def _erreur_mediane(test, prevu):
     return mesurer_erreur(test["prix_m2"], prevu, test["surface_reelle_bati"])["erreur_mediane_pct"]
 
 
-def main():
+def ajouter_arguments(parser):
+    """Cette commande n'a pas d'option."""
+
+
+def executer(args):
+    """Entraîne les modèles de comparaison, affiche les mesures et les écrit dans evaluation.json."""
     ventes = charger_ventes()
     entrainement, test = separer_par_annee(ventes)
     derniere_annee = entrainement[entrainement["annee"] == entrainement["annee"].max()]
@@ -106,9 +107,5 @@ def main():
             "couverture_fourchette_pct": arrondies[MODELE_COMMUNE]["couverture_pct"],
         },
     }
-    (DOSSIER / "evaluation.json").write_text(json.dumps(mesures, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"\nMesures écrites dans {DOSSIER / 'evaluation.json'}")
-
-
-if __name__ == "__main__":
-    main()
+    (DOSSIER_VILLES / "evaluation.json").write_text(json.dumps(mesures, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\nMesures écrites dans {DOSSIER_VILLES / 'evaluation.json'}")
