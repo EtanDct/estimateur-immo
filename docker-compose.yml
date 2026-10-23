@@ -4,6 +4,10 @@ services:
   api:
     build: .
     restart: unless-stopped
+    environment:
+      # Les clés d'API acceptées, séparées par des virgules. Elles sont lues dans le fichier .env
+      # placé à côté de ce fichier (jamais versionné, voir .env.example). Vide : l'API est ouverte.
+      CLES_API: ${CLES_API:-}
     volumes:
       # Les données restent sur le serveur, en lecture seule : data/prix_communes.csv à côté de ce fichier.
       - ./data:/app/data:ro

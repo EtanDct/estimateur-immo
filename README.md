@@ -310,6 +310,36 @@ d'environnement `ORIGINES_AUTORISEES` (séparés par des virgules). Par défaut 
 protection d'accès : `curl` ou un script ignorent le CORS, qui n'empêche que l'usage de l'API par
 un autre site, depuis le navigateur de ses visiteurs.
 
+### Clé d'API : seul le serveur du site peut appeler l'API
+
+Si la variable d'environnement `CLES_API` est définie (une ou plusieurs clés, séparées par des
+virgules), toutes les routes sauf `/health` exigent l'en-tête `X-API-Key` : sans clé valide, l'API
+répond **401** `{"detail": "Clé d'API manquante ou invalide."}`. Sans cette variable, l'API est
+ouverte (développement local). La comparaison des clés se fait en temps constant, et plusieurs clés
+peuvent coexister pour en changer sans interruption.
+
+Une clé n'a de sens que si celui qui l'envoie est un serveur : écrite dans le code d'une page web,
+elle serait lisible par tous les visiteurs. Le navigateur n'appelle donc **pas** l'API directement :
+
+```
+ navigateur ──POST──► tatane.me/api/estimation ──GET + X-API-Key + X-Visiteur-IP──► api.tatane.me
+ (aucun secret)        (route serveur du site, la clé est un secret Vercel)          (Caddy, puis l'API)
+```
+
+- Le **site** garde la clé dans une variable d'environnement serveur, vérifie les paramètres reçus et
+  les transmet. Il envoie aussi l'adresse IP de son visiteur dans `X-Visiteur-IP`.
+- L'**API** ne croit cet en-tête que si la requête porte une clé valide, et l'utilise pour la limite
+  de requêtes : sans cela, tous les visiteurs auraient l'adresse de Vercel et partageraient une seule
+  limite. Une requête sans clé valide ne peut pas échapper à la limite en inventant cet en-tête.
+- Le **CORS** n'est plus utile quand plus aucun navigateur n'appelle l'API : `ORIGINES_AUTORISEES`
+  peut alors être vide.
+- Ce que la clé ne protège pas : la route du site est publique, comme le site. L'abus se déplace
+  vers elle, d'où une limite de requêtes à y mettre aussi. L'API, elle, n'est plus joignable
+  directement.
+- Sur le serveur, les clés sont dans un fichier `.env` à côté de `docker-compose.yml` (modèle :
+  `.env.example`, jamais versionné, droits `600`). Générer une clé :
+  `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+
 ### Limite de requêtes
 
 Pour éviter qu'un visiteur ne sature le serveur, chaque adresse IP est limitée (bibliothèque
@@ -362,6 +392,10 @@ Le serveur est un VPS Ubuntu (utilisateur sans droits particuliers, connexion SS
 uniquement, pare-feu limité aux ports 22, 80 et 443). Le code est cloné dans `/srv/estimateur`.
 
 - **Mettre à jour le code :** `git pull`, puis `docker compose up -d --build`.
+- **Activer ou changer la clé d'API :** écrire `CLES_API=<clé>` dans `/srv/estimateur/.env`, puis
+  `docker compose up -d` (Compose recrée le conteneur avec la nouvelle variable). Pour une rotation
+  sans interruption : `CLES_API=<nouvelle>,<ancienne>`, mettre la nouvelle dans le site, puis retirer
+  l'ancienne. Ne rien écrire du secret dans le dépôt, les journaux ou une capture d'écran.
 - **Mettre à jour les données ou le modèle :** copier `prix_communes.csv` et `modeles.joblib` dans
   `/srv/estimateur/data/` avec `scp`, puis `docker compose restart api` (l'API ne lit les fichiers
   qu'au démarrage). Le fichier `modeles.joblib` est un fichier pickle : ne jamais charger un fichier

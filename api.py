@@ -7,6 +7,8 @@ et traduit les résultats et les erreurs en réponses HTTP.
 Documentation interactive : http://127.0.0.1:8000/docs
 
 Variables d'environnement (facultatives) :
+    CLES_API : les clés d'API acceptées, séparées par des virgules. Si elle est définie, toutes les
+    routes sauf /health exigent l'en-tête X-API-Key (erreur 401 sinon). Sans elle, l'API est ouverte.
     ORIGINES_AUTORISEES : sites autorisés à appeler l'API depuis un navigateur (CORS),
     séparés par des virgules. Par défaut : le site et son serveur de développement local.
     LIMITE_ESTIMATION, LIMITE_DEFAUT : nombre de requêtes autorisées par visiteur (adresse IP),
@@ -14,11 +16,12 @@ Variables d'environnement (facultatives) :
     DOSSIER_DONNEES : le dossier qui contient prix_communes.csv et modeles.joblib (par défaut data/villes/).
 """
 
+import hmac
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
@@ -35,11 +38,51 @@ ORIGINES_PAR_DEFAUT = "https://www.tatane.me,https://tatane.me,http://localhost:
 LIMITE_ESTIMATION = os.environ.get("LIMITE_ESTIMATION", "30/minute")
 LIMITE_DEFAUT = os.environ.get("LIMITE_DEFAUT", "60/minute")
 
-# Le visiteur est identifié par son adresse IP. Derrière Caddy, uvicorn la lit dans l'en-tête
-# X-Forwarded-For (voir le Dockerfile) : sans cela, tous les visiteurs auraient l'IP de Caddy
-# et se partageraient une seule limite. Les compteurs sont en mémoire : ils repartent de zéro
-# au redémarrage.
-limiter = Limiter(key_func=get_remote_address, default_limits=[LIMITE_DEFAUT])
+
+def _lire_cles():
+    """Lit les clés d'API acceptées dans la variable d'environnement CLES_API (séparées par des virgules)."""
+    return [cle.strip().encode() for cle in os.environ.get("CLES_API", "").split(",") if cle.strip()]
+
+
+# Plusieurs clés à la fois : on peut en changer sans interruption (ajouter la nouvelle, mettre le
+# site à jour, retirer l'ancienne). Une liste vide veut dire que l'API n'exige aucune clé.
+CLES_API = _lire_cles()
+
+
+def _cle_valide(cle):
+    """Dit si la clé reçue fait partie des clés acceptées."""
+    if not cle:
+        return False
+    recue = cle.encode()
+    # compare_digest prend le même temps que les deux clés se ressemblent ou non, pour qu'on ne
+    # puisse pas deviner une clé caractère par caractère en mesurant la durée de la réponse.
+    # La liste [...] force la comparaison avec toutes les clés, sans s'arrêter à la première.
+    return any([hmac.compare_digest(recue, attendue) for attendue in CLES_API])
+
+
+def exiger_cle(x_api_key: str | None = Header(default=None)):
+    """Refuse (401) une requête sans clé valide dans X-API-Key, si des clés sont configurées."""
+    if CLES_API and not _cle_valide(x_api_key):
+        raise HTTPException(status_code=401, detail="Clé d'API manquante ou invalide.")
+
+
+def _visiteur(request: Request):
+    """Identifie le visiteur pour la limite de requêtes : son adresse IP.
+
+    Derrière Caddy, uvicorn la lit dans l'en-tête X-Forwarded-For (voir le Dockerfile) : sans cela,
+    tous les visiteurs auraient l'IP de Caddy et se partageraient une seule limite.
+    Quand le serveur du site appelle l'API, l'IP vue est celle de Vercel, la même pour tous les
+    visiteurs : le site transmet donc la vraie dans X-Visiteur-IP. Cet en-tête n'est cru que si la
+    requête porte une clé valide ; sinon n'importe qui pourrait l'inventer pour échapper à la limite.
+    """
+    transmise = request.headers.get("x-visiteur-ip")
+    if CLES_API and transmise and _cle_valide(request.headers.get("x-api-key")):
+        return transmise[:64]
+    return get_remote_address(request)
+
+
+# Les compteurs de la limite sont en mémoire : ils repartent de zéro au redémarrage.
+limiter = Limiter(key_func=_visiteur, default_limits=[LIMITE_DEFAUT])
 
 
 def _origines_autorisees():
@@ -118,13 +161,13 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/communes")
+@app.get("/communes", dependencies=[Depends(exiger_cle)])
 def communes(request: Request):
     """Liste les communes connues, pour l'autocomplétion du formulaire."""
     return request.app.state.communes
 
 
-@app.get("/info")
+@app.get("/info", dependencies=[Depends(exiger_cle)])
 def info(request: Request):
     """Indique la zone couverte : départements, années des ventes et nombre de communes."""
     return request.app.state.info
@@ -132,7 +175,7 @@ def info(request: Request):
 
 # def et non async def : estimer() est un calcul bloquant, FastAPI l'exécute alors à part
 # pour ne pas figer le serveur pendant ce temps.
-@app.get("/estimation")
+@app.get("/estimation", dependencies=[Depends(exiger_cle)])
 @limiter.limit(LIMITE_ESTIMATION)
 def estimation(
     request: Request, commune: str, type_local: str, surface: float,
