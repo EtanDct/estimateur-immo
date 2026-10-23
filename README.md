@@ -1,5 +1,7 @@
 # estimateur-immo
 
+[![CI](https://github.com/EtanDct/estimateur-immo/actions/workflows/ci.yml/badge.svg)](https://github.com/EtanDct/estimateur-immo/actions/workflows/ci.yml)
+
 Estime une fourchette de prix pour un bien (maison ou appartement) dans l'une des dix plus grandes
 villes de France, à partir des ventes réellement enregistrées dans les **Demandes de valeurs
 foncières géolocalisées (DVF)** publiées sur data.gouv.fr. Les estimations viennent d'un modèle
@@ -89,12 +91,15 @@ estimateur-immo/
 │       ├── estimer.py       estime le prix d'un bien
 │       ├── graphique.py     trace le graphique
 │       └── explorer.py      explore les fichiers DVF d'un département (diagnostics)
+├── tests/                   les tests pytest, sur des ventes factices (voir « Tests et intégration continue »)
+├── .github/workflows/       l'intégration continue : style, tests, image Docker
 ├── data/                    données, ignorées par Git (sous-dossier villes/ : celles du projet)
 ├── docs/                    le graphique
 │
-├── pyproject.toml           métadonnées du projet et commande installable `estimateur`
+├── pyproject.toml           métadonnées du projet et réglages de pytest et ruff, commande installable `estimateur`
 ├── requirements.txt         toutes les bibliothèques du projet (développement)
 ├── requirements-api.txt     seulement celles dont l'API a besoin (utilisé par le Dockerfile)
+├── requirements-dev.txt     l'API, plus pytest et ruff (utilisé par la CI)
 ├── Dockerfile               l'image Docker de l'API (code seul, sans les données)
 ├── .dockerignore            liste blanche des fichiers envoyés à Docker
 ├── docker-compose.yml       lance l'API et Caddy (HTTPS) ensemble
@@ -504,8 +509,39 @@ from estimateur.modele import charger_modeles, estimer_prix
 print(estimer_prix(charger_prix_communes(DOSSIER_VILLES), charger_modeles(DOSSIER_VILLES), "Lyon", "Appartement", 65))
 ```
 
+## Tests et intégration continue
+
+```powershell
+python -m pip install -r requirements-dev.txt   # l'API, plus pytest et ruff
+ruff check .                                    # style, imports, erreurs courantes
+pytest                                          # environ 180 tests, une minute
+```
+
+Les tests n'ont besoin d'aucune vraie donnée (`data/` n'est pas dans Git) : `tests/conftest.py`
+fabrique 800 ventes factices aux prix connus d'avance, avec les vrais codes de commune (Lille,
+Lyon 1er et 3e, Paris 1er et 2e), et entraîne de vrais modèles dessus.
+
+| Fichier | Ce qu'il vérifie |
+|---|---|
+| `test_donnees.py` | chacune des six étapes de `nettoyer()` sur des lignes faites main, les statistiques par commune, le chargement et le téléchargement (sans réseau) |
+| `test_estimation.py` | la validation d'une demande (surface, type, texte, caractères de contrôle), le repli sur la ville, l'arrondi à l'euro |
+| `test_modele.py` | la mesure sans triche (séparation par année, référence, erreur, couverture de la fourchette), le modèle qui bat une valeur constante, les bornes de surface, le rattachement d'une adresse à sa commune, l'enregistrement des modèles |
+| `test_api.py` | les statuts et les messages d'erreur, les champs que le site attend, la clé d'API, la limite par visiteur et `X-Visiteur-IP`, CORS, HEAD, la documentation désactivée, le schéma OpenAPI |
+| `test_villes.py` | la liste des villes et la ligne de commande |
+
+Pour vérifier que les tests servent à quelque chose, on peut casser le code exprès (accepter une clé
+fausse, croire `X-Visiteur-IP` sans clé, garder les ventes de plusieurs logements, laisser passer une
+surface hors bornes) : à chaque fois, au moins un test échoue.
+
+L'intégration continue (`.github/workflows/ci.yml`) tourne à chaque envoi sur `main` et à chaque pull
+request, avec deux tâches :
+
+1. **Style et tests** : `ruff check .` puis `pytest`, sur Python 3.15 comme l'image Docker.
+2. **Image Docker** : construit l'image, la lance sur un fichier de statistiques minimal, attend
+   qu'elle soit saine, vérifie une estimation, l'absence d'en-tête `Server` et que la requête n'est
+   pas écrite dans les journaux (elle contient la position du bien).
+
 ## Suite prévue
 
-Tests automatiques et intégration continue, déploiement automatique, puis une explication en
-langage clair de chaque estimation (un LLM met en mots les chiffres du modèle, sans jamais les
-produire ni les modifier).
+Déploiement automatique après des tests réussis, puis une explication en langage clair de chaque
+estimation (un LLM met en mots les chiffres du modèle, sans jamais les produire ni les modifier).

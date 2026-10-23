@@ -1,0 +1,90 @@
+# Vérifie chaque modification : style, tests, puis construction et lancement de l'image Docker.
+# Les tests n'ont pas besoin des vraies données (data/ n'est pas dans Git) : ils fabriquent les leurs.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Une nouvelle modification annule la vérification précédente de la même branche.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Le strict nécessaire : lire le code. Aucune vérification n'a besoin de modifier le dépôt.
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Style et tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.15"  # celle du Dockerfile
+          cache: pip
+          cache-dependency-path: requirements-*.txt
+
+      - name: Installer les dépendances
+        run: pip install -r requirements-dev.txt
+
+      - name: Style (ruff)
+        run: ruff check .
+
+      - name: Tests (pytest)
+        run: pytest
+
+  docker:
+    name: Image Docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Construire l'image
+        run: docker build --tag estimateur-immo .
+
+      # L'image contient le code mais pas les données : on lui monte un fichier de statistiques
+      # minimal, comme le fait docker-compose.yml sur le serveur.
+      - name: Lancer l'image sur des données minimales
+        run: |
+          mkdir donnees
+          printf '%s\n' \
+            'code_commune,nom_commune,type_local,mediane,quartile_1,quartile_3,nombre_ventes,annee_min,annee_max' \
+            '59350,Lille,Appartement,3300,2800,3900,50,2024,2025' > donnees/prix_communes.csv
+          docker run --detach --name api --publish 127.0.0.1:8000:8000 --volume "$PWD/donnees:/app/data:ro" estimateur-immo
+
+      - name: Attendre que l'API soit saine
+        run: |
+          for i in $(seq 1 30); do
+            etat=$(docker inspect --format '{{.State.Health.Status}}' api)
+            echo "essai $i : $etat"
+            [ "$etat" = healthy ] && exit 0
+            sleep 2
+          done
+          docker logs api
+          exit 1
+
+      - name: Vérifier les réponses
+        run: |
+          curl --fail --silent --show-error --dump-header en-tetes.txt \
+            'http://127.0.0.1:8000/estimation?commune=Lille&type_local=Appartement&surface=60' | tee reponse.json
+          echo
+          grep -q '"prix_median":198000' reponse.json
+          # Le serveur ne doit pas annoncer sa version.
+          ! grep -qi '^server:' en-tetes.txt
+
+      # Les requêtes contiennent la position du bien estimé : l'API ne doit pas les journaliser.
+      - name: Vérifier que les requêtes ne sont pas journalisées
+        run: |
+          ! docker logs api 2>&1 | grep -q 'GET /estimation'
+
+      - name: Journaux du conteneur
+        if: failure()
+        run: docker logs api

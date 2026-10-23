@@ -25,3 +25,22 @@ estimateur = "estimateur.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["estimateur*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# La racine du projet dans le chemin de Python : « pytest » trouve estimateur/ sans installation préalable.
+pythonpath = ["."]
+filterwarnings = [
+    # slowapi (bibliothèque tierce) utilise une fonction qui disparaîtra de Python 3.16 : rien à corriger chez nous.
+    "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning:slowapi",
+]
+
+[tool.ruff]
+# Le code garde ses commentaires et ses messages sur une seule ligne : 160 caractères.
+line-length = 160
+# tests/ est cherché comme le projet : « from conftest import ... » y est un import local, pas une bibliothèque.
+src = [".", "tests"]
+
+[tool.ruff.lint]
+# E et F : erreurs de syntaxe, imports ou variables inutilisés. I : imports triés. B : pièges courants.
+select = ["E", "F", "I", "B"]

@@ -1,0 +1,12 @@
+# Ce qu'il faut pour tester et vérifier le code (pytest, ruff) : l'API, plus les outils de test.
+# Rien de tout cela n'entre dans l'image Docker.
+-r requirements-api.txt
+colorama==0.4.6; sys_platform == "win32"
+httpcore2==2.16.0
+httpx2==2.16.0
+iniconfig==2.3.1
+pluggy==1.7.0
+Pygments==2.21.0
+pytest==9.1.1
+ruff==0.17.2
+truststore==0.10.5
