@@ -22,9 +22,14 @@ VENTES_MIN = 10
 # Les types de biens pris en compte (valeurs de la colonne type_local).
 TYPES_DE_BIEN = ("Maison", "Appartement")
 
-# Surface maximale acceptée pour une estimation : au-delà, ce n'est plus un logement, et un
-# nombre démesuré (1e308, inf) ferait déborder les calculs.
-SURFACE_MAX = 10_000
+# Surfaces acceptées pour une estimation (en m²). 9 m² est la surface minimale d'un logement
+# décent ; au-delà de 1 000 m², ce n'est plus un logement. Le modèle est plus strict : il refuse
+# aussi les surfaces qu'il n'a jamais vues dans les ventes (voir modele.py).
+SURFACE_MIN = 9
+SURFACE_MAX = 1_000
+
+# Longueur maximale d'un nom de commune ou de type de bien reçu en paramètre.
+LONGUEUR_TEXTE_MAX = 100
 
 # Les années chargées par défaut : assez de ventes par commune, sans mélanger des
 # niveaux de prix trop éloignés dans le temps.

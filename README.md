@@ -200,10 +200,18 @@ comment le générer.
 
 ### `chercher_ligne(...)` et `estimer(prix, commune, type_local, surface, ventes_min=10)`
 
-`chercher_ligne` vérifie la demande et trouve la ligne de statistiques de la commune ; `estimer`
-en tire un dictionnaire : `prix_bas` (surface × 1er quartile), `prix_median`, `prix_haut` (surface ×
-3e quartile), `prix_m2_median`, `nombre_ventes`, `annee_min`, `annee_max`, `commune`, `type_local`,
-`surface`. C'est la méthode de repli du projet : médianes et quartiles, sans modèle.
+`chercher_ligne` vérifie la demande et trouve la ligne de statistiques de la commune ;
+`chercher_ligne_avec_repli` y ajoute un repli, et `estimer` en tire un dictionnaire : `prix_bas`
+(surface × 1er quartile), `prix_median`, `prix_haut` (surface × 3e quartile, ces trois montants
+arrondis à l'euro), `prix_m2_median`, `nombre_ventes`, `annee_min`, `annee_max`, `commune`,
+`type_local`, `surface` et `repli`. C'est la méthode de repli du projet : médianes et quartiles, sans
+modèle.
+
+**Le repli sur la ville.** Une maison se vend rarement dans un arrondissement du centre de Paris :
+16 des 110 combinaisons commune × type de bien ont moins de 10 ventes (des maisons dans 13
+arrondissements de Paris, 3 de Lyon et Marseille 1er). Plutôt que de répondre « introuvable », on
+prend alors les statistiques de la ville entière, et le champ `repli` nomme cette ville (`null`
+sinon). Si la ville manque aussi de ventes, l'erreur reste.
 
 Le nom de la commune est comparé sans tenir compte de la casse, des accents ni des tirets :
 `epernay`, `ÉPERNAY` et `Épernay` désignent la même commune.
@@ -214,12 +222,15 @@ les données ne permettent pas de répondre). L'API en tire le code HTTP.
 
 | Cas | Exception | Code HTTP |
 |---|---|---|
-| Surface hors de 0 à 10 000 m² (ou `nan`, `inf`) | `ParametreInvalide` | 422 |
+| Surface hors de 9 à 1 000 m² (ou `nan`, `inf`) | `ParametreInvalide` | 422 |
 | Type de bien autre que Maison ou Appartement | `ParametreInvalide` | 422 |
+| Nom de commune ou de type trop long (plus de 100 caractères) ou avec des caractères de contrôle | `ParametreInvalide` | 422 |
 | Plusieurs communes de même nom | `ParametreInvalide` | 422 |
 | Nom de commune absent du tableau | `BienIntrouvable` | 404 |
 | Commune sans vente de ce type de bien | `BienIntrouvable` | 404 |
-| Moins de 10 ventes | `BienIntrouvable` | 404 |
+| Moins de 10 ventes (et la ville aussi, s'il y a une ville) | `BienIntrouvable` | 404 |
+
+Les messages d'erreur répètent le texte reçu, tronqué à 60 caractères.
 
 ### `noms_communes(prix)`, `zone_couverte(prix)` et `classer_communes(prix, type_local)`
 
@@ -247,11 +258,24 @@ Deux variantes sont déployées :
 |---|---|
 | `adresse` | `latitude` et `longitude` fournies |
 | `commune` | pas d'adresse, et une commune que le modèle connaît (un arrondissement, ou une ville sans arrondissements) |
-| `mediane` | « Paris », « Lyon » ou « Marseille » en entier sans adresse (le modèle ne les connaît que par arrondissement), ou fichier du modèle absent |
+| `mediane` | « Paris », « Lyon » ou « Marseille » en entier sans adresse (le modèle ne les connaît que par arrondissement), commune en repli sur sa ville (champ `repli`, l'adresse est alors ignorée), ou fichier du modèle absent |
 
-Une adresse est refusée (422) si elle ne se trouve pas dans la zone des ventes de la commune demandée
-(marge de 3 km) : une adresse de Bordeaux pour la commune de Lille, par exemple. La règle des 10
-ventes minimum de la commune et du type de bien s'applique aussi avec une adresse.
+**Contrôles de la demande.** Ils évitent des réponses d'apparence normale mais sans valeur :
+
+- **La surface** doit rester dans ce que les ventes ont montré pour ce type de bien (entre le
+  0,1e et le 99,9e centile : de 7 à 270 m² pour un appartement, de 20 à 402 m² pour une maison). Un arbre
+  de décision ne sait pas extrapoler : au-delà, il répéterait le prix de la dernière feuille. Dans
+  tous les cas, la surface doit aussi être comprise entre 9 et 1 000 m².
+- **L'adresse** est rattachée à une commune par ses ventes voisines : on regarde les 10 ventes les
+  plus proches (un index de positions enregistré avec les modèles). L'adresse est acceptée si au
+  moins 2 d'entre elles sont dans la commune demandée (une adresse en bordure d'arrondissement a des
+  voisins des deux côtés), et pour une ville entière si elles sont dans l'un de ses arrondissements.
+  Sinon l'erreur dit où se trouve l'adresse (« Cette adresse se trouve à Lyon 3e Arrondissement, pas à
+  Lyon 1er Arrondissement. »). Une position à plus de 1,5 km de toute vente (une mer, un autre pays)
+  est « en dehors des villes couvertes ».
+- **Les coordonnées** doivent être des nombres dans les limites du globe.
+- **Une adresse imprécise.** L'API ne sait pas si les coordonnées viennent d'un numéro de rue ou du
+  centre d'une rue entière : c'est au site de n'envoyer des coordonnées que pour un numéro de rue.
 
 **Protocole d'évaluation** (commande `evaluer`) :
 
@@ -301,22 +325,31 @@ aucune logique métier : elle traduit les requêtes en appels et les résultats 
 `modeles.joblib` manque, il démarre et répond avec les médianes seules.
 
 ```powershell
-python -m uvicorn estimateur.api:app --reload      # http://127.0.0.1:8000, documentation sur /docs
+python -m uvicorn estimateur.api:app --reload      # http://127.0.0.1:8000
+$env:ACTIVER_DOCS = "1"                            # facultatif : sert aussi /docs et /redoc
 ```
+
+Les pages `/docs` et `/redoc` chargent leurs scripts depuis un CDN public : elles sont désactivées
+par défaut, et activées seulement si la variable `ACTIVER_DOCS` est définie. Le schéma OpenAPI
+(`/openapi.json`) reste disponible : réponses 200, 401, 404, 422 et 429, paramètres décrits.
 
 | Route | Réponse |
 |---|---|
-| `GET /health` | `{"status": "ok"}` : vérifie que le service tourne |
+| `GET /health` (et `HEAD`) | `{"status": "ok"}` : vérifie que le service tourne |
 | `GET /communes` | la liste des noms de communes connues (autocomplétion) |
 | `GET /info` | la zone couverte, déduite des données : départements, villes, années, nombre de communes, et les mesures du modèle (erreur médiane de chaque méthode, mesurée sur 2025) |
-| `GET /estimation?commune=Lyon&type_local=Appartement&surface=65` | le dictionnaire de `estimer_prix()`, avec le champ `methode` |
+| `GET /estimation?commune=Lyon&type_local=Appartement&surface=65` | le dictionnaire de `estimer_prix()`, avec les champs `methode` et `repli` ; montants en euros entiers |
 | `GET /estimation?...&latitude=45.76&longitude=4.83` | idem, avec l'adresse du bien (méthode `adresse`) |
 
 Erreurs de `/estimation`, au format `{"detail": "message"}` : **404** si le bien est introuvable
 (commune inconnue, aucune vente de ce type, moins de 10 ventes), **422** si un paramètre est
 invalide (surface, type de bien, commune ambiguë, latitude sans longitude, adresse hors de la
-commune), **429** si la limite de requêtes est atteinte. Un paramètre manquant ou non numérique
-donne aussi un 422, dont le détail est une liste (format standard de FastAPI).
+commune), **429** si la limite de requêtes est atteinte. Un paramètre manquant, non numérique ou
+répété donne aussi un 422, avec le même format : une phrase en français dans `detail`.
+
+Les réponses de `/communes` et `/info` portent `Cache-Control: public, max-age=3600` : ces données ne
+changent qu'à chaque nouvelle version des fichiers. Le serveur n'annonce ni sa version (`Server`),
+et Caddy ajoute `Strict-Transport-Security` et `X-Content-Type-Options: nosniff`.
 
 Le **CORS** limite les appels depuis un navigateur aux sites listés dans la variable
 d'environnement `ORIGINES_AUTORISEES` (séparés par des virgules). Par défaut :
@@ -360,7 +393,8 @@ Pour éviter qu'un visiteur ne sature le serveur, chaque adresse IP est limitée
 `slowapi`) : **30 requêtes par minute** sur `/estimation`, **60 par minute** sur `/communes` et
 `/info` (un compteur par route et par visiteur). `/health` n'est pas limitée : le contrôle de
 santé de Docker l'appelle toutes les 30 secondes. Au-delà, l'API répond **429** avec
-`{"detail": "Trop de requêtes : réessayez dans une minute."}` et l'en-tête `Retry-After`. La
+`{"detail": "Trop de requêtes : réessayez dans N s."}` et l'en-tête `Retry-After`, qui donne le
+temps d'attente réel jusqu'à la fin de la fenêtre. La
 réponse 429 porte aussi les en-têtes CORS, pour que le site puisse l'afficher, et déclare
 `Retry-After` dans `Access-Control-Expose-Headers` : sans cela, le navigateur cache cet en-tête au
 JavaScript du site.

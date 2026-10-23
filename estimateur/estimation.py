@@ -6,7 +6,7 @@ L'estimation par modèle (modele.py) s'appuie sur les mêmes vérifications.
 
 import unicodedata
 
-from .config import SURFACE_MAX, TYPES_DE_BIEN, VENTES_MIN
+from .config import LONGUEUR_TEXTE_MAX, SURFACE_MAX, SURFACE_MIN, TYPES_DE_BIEN, VENTES_MIN
 
 
 # Les deux erreurs d'une estimation sont des ValueError : un programme qui attrape ValueError les
@@ -33,6 +33,18 @@ def _normaliser(texte):
     return " ".join(simple.split())  # split() + join : supprime les espaces en trop
 
 
+def _court(texte, longueur=60):
+    """Raccourcit un texte reçu en paramètre avant de le répéter dans un message d'erreur."""
+    texte = str(texte)
+    return texte if len(texte) <= longueur else texte[:longueur] + "…"
+
+
+def _verifier_texte(valeur, nom):
+    """Refuse un paramètre texte trop long ou qui contient des caractères de contrôle (octet nul...)."""
+    if len(valeur) > LONGUEUR_TEXTE_MAX or any(unicodedata.category(c)[0] == "C" for c in valeur):
+        raise ParametreInvalide(f"Le paramètre {nom} est trop long ou contient des caractères invalides.")
+
+
 def chercher_ligne(prix, commune, type_local, surface, ventes_min=VENTES_MIN):
     """Vérifie les paramètres d'une estimation et renvoie la ligne de statistiques qui la concerne.
 
@@ -42,21 +54,25 @@ def chercher_ligne(prix, commune, type_local, surface, ventes_min=VENTES_MIN):
     est invalide ou si le nom de commune désigne plusieurs communes, BienIntrouvable si la
     commune est inconnue ou compte moins de ventes_min ventes.
     """
-    # not (0 < surface <= max) plutôt que surface <= 0 : une valeur NaN fait échouer toute
+    # not (min <= surface <= max) plutôt que deux tests séparés : une valeur NaN fait échouer toute
     # comparaison, donc elle est rejetée aussi.
-    if not 0 < surface <= SURFACE_MAX:
-        raise ParametreInvalide(f"La surface doit être comprise entre 0 et {SURFACE_MAX} m² (reçu : {surface:g}).")
+    if not SURFACE_MIN <= surface <= SURFACE_MAX:
+        raise ParametreInvalide(
+            f"La surface doit être comprise entre {SURFACE_MIN} et {SURFACE_MAX} m² (reçu : {surface:.10g})."
+        )
+    _verifier_texte(commune, "commune")
+    _verifier_texte(type_local, "type_local")
 
     types = {_normaliser(t): t for t in TYPES_DE_BIEN}
     if _normaliser(type_local) not in types:
-        raise ParametreInvalide(f"Type de bien inconnu : {type_local!r}. Valeurs possibles : {', '.join(TYPES_DE_BIEN)}.")
+        raise ParametreInvalide(f"Type de bien inconnu : {_court(type_local)!r}. Valeurs possibles : {', '.join(TYPES_DE_BIEN)}.")
     type_local = types[_normaliser(type_local)]
 
     # On compare les noms sous forme normalisée, pour ignorer la casse et les accents.
     noms = prix["nom_commune"].map(_normaliser)
     de_la_commune = prix[noms == _normaliser(commune)]
     if de_la_commune.empty:
-        raise BienIntrouvable(f"Commune introuvable : {commune!r} (nom mal écrit, ou aucune vente exploitable).")
+        raise BienIntrouvable(f"Commune introuvable : {_court(commune)!r} (nom mal écrit, ou aucune vente exploitable).")
 
     lignes = de_la_commune[de_la_commune["type_local"] == type_local]
     nom = de_la_commune["nom_commune"].iloc[0]
@@ -75,15 +91,47 @@ def chercher_ligne(prix, commune, type_local, surface, ventes_min=VENTES_MIN):
     return ligne
 
 
+def chercher_ligne_avec_repli(prix, commune, type_local, surface, ventes_min=VENTES_MIN):
+    """Comme chercher_ligne(), avec un repli quand une commune manque de ventes d'un type de bien.
+
+    Une maison dans un arrondissement de Paris, par exemple, se vend rarement : si la commune existe
+    mais n'a pas assez de ventes de ce type, et si elle fait partie d'une ville (colonne ville du
+    tableau), on prend les statistiques de la ville entière.
+
+    Renvoie (ligne, repli). repli est le nom de la ville utilisée à la place, ou None. La ligne porte
+    toujours le nom de la commune demandée (nom_commune) et son code (code_commune_demandee), même
+    quand ses statistiques sont celles de la ville.
+    """
+    try:
+        ligne, repli = chercher_ligne(prix, commune, type_local, surface, ventes_min), None
+    except BienIntrouvable as erreur:
+        de_la_commune = prix[prix["nom_commune"].map(_normaliser) == _normaliser(commune)]
+        ville = de_la_commune["ville"].iloc[0] if "ville" in prix.columns and not de_la_commune.empty else None
+        if not isinstance(ville, str) or _normaliser(ville) == _normaliser(commune):
+            raise
+        try:
+            ligne, repli = chercher_ligne(prix, ville, type_local, surface, ventes_min), ville
+        except BienIntrouvable:
+            raise erreur from None  # la ville n'a pas assez de ventes non plus : on garde le message d'origine
+        ligne = ligne.copy()
+        ligne["nom_commune"] = de_la_commune["nom_commune"].iloc[0]
+        ligne["code_commune_demandee"] = de_la_commune["code_commune"].iloc[0]
+        return ligne, repli
+    ligne = ligne.copy()
+    ligne["code_commune_demandee"] = ligne["code_commune"]
+    return ligne, repli
+
+
 def estimer(prix, commune, type_local, surface, ventes_min=VENTES_MIN):
     """Estime une fourchette de prix pour un bien, à partir des statistiques par commune.
 
     prix : le tableau produit par prix_par_commune() (ou lu par charger_prix_communes()).
-    Renvoie un dictionnaire : commune, type_local, surface, nombre_ventes, annee_min,
-    annee_max, prix_m2_median, et prix_bas / prix_median / prix_haut (surface x quartile_1,
-    mediane, quartile_3). Les erreurs sont celles de chercher_ligne().
+    Renvoie un dictionnaire : commune, type_local, surface, nombre_ventes, annee_min, annee_max,
+    prix_m2_median, prix_bas / prix_median / prix_haut (surface x quartile_1, mediane, quartile_3,
+    arrondis à l'euro) et repli (le nom de la ville dont les statistiques ont remplacé celles de la
+    commune, ou None). Les erreurs sont celles de chercher_ligne().
     """
-    ligne = chercher_ligne(prix, commune, type_local, surface, ventes_min)
+    ligne, repli = chercher_ligne_avec_repli(prix, commune, type_local, surface, ventes_min)
     return {
         "commune": ligne["nom_commune"],
         "type_local": ligne["type_local"],
@@ -91,10 +139,11 @@ def estimer(prix, commune, type_local, surface, ventes_min=VENTES_MIN):
         "nombre_ventes": int(ligne["nombre_ventes"]),
         "annee_min": int(ligne["annee_min"]),
         "annee_max": int(ligne["annee_max"]),
-        "prix_m2_median": float(ligne["mediane"]),
-        "prix_bas": surface * float(ligne["quartile_1"]),
-        "prix_median": surface * float(ligne["mediane"]),
-        "prix_haut": surface * float(ligne["quartile_3"]),
+        "prix_m2_median": round(float(ligne["mediane"])),
+        "prix_bas": round(surface * float(ligne["quartile_1"])),
+        "prix_median": round(surface * float(ligne["mediane"])),
+        "prix_haut": round(surface * float(ligne["quartile_3"])),
+        "repli": repli,
     }
 
 

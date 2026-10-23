@@ -33,4 +33,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 # et il remplace toujours cet en-tête par l'adresse réelle du client.
 # --no-access-log : les requêtes ne sont pas journalisées. Elles contiennent la position du bien
 # estimé (latitude, longitude), une donnée personnelle qu'il n'y a aucune raison de conserver.
-CMD ["python", "-m", "uvicorn", "estimateur.api:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*", "--no-access-log"]
+CMD ["python", "-m", "uvicorn", "estimateur.api:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*", "--no-access-log", "--no-server-header"]

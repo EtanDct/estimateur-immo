@@ -2,5 +2,15 @@
 # "api" est le nom du service dans docker-compose.yml.
 api.tatane.me {
 	encode zstd gzip
+
+	header {
+		# Le navigateur ne doit plus jamais contacter ce domaine en HTTP, pendant un an.
+		Strict-Transport-Security "max-age=31536000"
+		# Le navigateur ne doit pas deviner le type d'une réponse : du JSON reste du JSON.
+		X-Content-Type-Options "nosniff"
+		# Ne pas annoncer le serveur utilisé.
+		-Server
+	}
+
 	reverse_proxy api:8000
 }

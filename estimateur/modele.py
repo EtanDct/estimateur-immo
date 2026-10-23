@@ -4,6 +4,7 @@ Comme donnees.py, ce module n'affiche rien : la commande evaluer l'appelle et pr
 """
 
 import math
+from collections import Counter
 from pathlib import Path
 
 import joblib
@@ -11,11 +12,12 @@ import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.neighbors import NearestNeighbors
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OrdinalEncoder
 
 from .config import DOSSIER_VILLES
-from .estimation import ParametreInvalide, chercher_ligne, estimer
+from .estimation import ParametreInvalide, chercher_ligne_avec_repli, estimer
 
 # L'année de test : on entraîne sur les années d'avant, on teste sur celle-ci, comme en vrai
 # (le modèle prédit l'avenir à partir du passé).
@@ -36,9 +38,20 @@ VARIABLES_COMPLET = VARIABLES_PIECES + ("latitude", "longitude")  # tout (plafon
 # Le modèle entraîné est enregistré dans ce fichier, à côté des statistiques par commune.
 FICHIER_MODELES = "modeles.joblib"
 
-# Une adresse est acceptée si elle tombe dans la zone des ventes de sa commune, élargie de cette
-# marge (en degrés, environ 3 km). Sert à refuser une adresse de Bordeaux pour la commune de Lille.
-MARGE_DEGRES = 0.03
+# Une adresse est rattachée à la commune de ses ventes voisines. On regarde les NB_VOISINS ventes les
+# plus proches : l'adresse est acceptée si au moins VOTES_MIN d'entre elles sont dans la commune
+# demandée (une adresse en bordure d'arrondissement a des voisins des deux côtés), et refusée si la
+# vente la plus proche est à plus de DISTANCE_MAX_DEGRES (environ 1,5 km), c'est-à-dire hors des villes.
+NB_VOISINS = 10
+VOTES_MIN = 2
+DISTANCE_MAX_DEGRES = 0.0135
+
+# Un degré de longitude est plus court qu'un degré de latitude (de cos(latitude) : environ 0,69 à 46° N).
+# On multiplie la longitude par ce facteur pour que les distances en « degrés » soient comparables.
+COS_LATITUDE = 0.69
+
+# Les surfaces refusées sont celles hors de ce que les ventes ont montré : entre ces deux centiles.
+CENTILES_SURFACE = (0.001, 0.999)
 
 
 def charger_ventes(dossier=DOSSIER_VILLES):
@@ -150,21 +163,55 @@ def zones_communes(ventes, regroupements=None):
     return zones
 
 
+def _projeter(latitude, longitude):
+    """Met une position en « degrés comparables » : la longitude est raccourcie par COS_LATITUDE."""
+    return [latitude, longitude * COS_LATITUDE]
+
+
 def entrainer_modeles(ventes, regroupements=None, metriques=None):
     """Entraîne les modèles finaux sur toutes les ventes et renvoie ce qu'il faut pour les utiliser.
 
     Deux modèles, chacun en trois exemplaires (25e centile, médiane, 75e centile) :
     « commune » (commune, type, surface, année) et « adresse » (type, surface, année, position).
+    Le résultat garde aussi de quoi contrôler une demande : les surfaces observées par type de bien,
+    et un index des positions des ventes pour retrouver la commune d'une adresse.
     metriques : les mesures de la commande evaluer, gardées avec les modèles pour être affichées.
     """
     annee = int(ventes["annee"].max())
+    regroupements = regroupements or {}
+    communes = sorted(ventes["code_commune"].unique())
+
+    avec_position = ventes.dropna(subset=["latitude", "longitude"])
+    index_des_communes = {code: i for i, code in enumerate(communes)}
+    positions = np.array([_projeter(la, lo) for la, lo in zip(avec_position["latitude"], avec_position["longitude"])])
+    voisins = {
+        "index": NearestNeighbors(n_neighbors=NB_VOISINS, algorithm="kd_tree").fit(positions),
+        "etiquettes": avec_position["code_commune"].map(index_des_communes).to_numpy(dtype=np.int16),
+    }
+
+    noms = ventes.drop_duplicates("code_commune").set_index("code_commune")["nom_commune"].to_dict()
+    noms.update({code: nom for code, (nom, _) in regroupements.items()})
+
+    bas, haut = CENTILES_SURFACE
+    surfaces = {
+        type_local: (
+            math.floor(groupe["surface_reelle_bati"].quantile(bas)),
+            math.ceil(groupe["surface_reelle_bati"].quantile(haut)),
+        )
+        for type_local, groupe in ventes.groupby("type_local")
+    }
+
     return {
         "commune": {q: entrainer(ventes, VARIABLES_COMMUNE, q) for q in (0.25, 0.5, 0.75)},
         "adresse": {q: entrainer(ventes, VARIABLES_ADRESSE, q) for q in (0.25, 0.5, 0.75)},
         "annee": annee,
         "annees": (int(ventes["annee"].min()), annee),
-        "communes": sorted(ventes["code_commune"].unique()),
+        "communes": communes,
         "zones": zones_communes(ventes, regroupements),
+        "voisins": voisins,
+        "noms": noms,
+        "enfants": {code: list(codes) for code, (_, codes) in regroupements.items()},
+        "surfaces": surfaces,
         "metriques": metriques or {},
     }
 
@@ -184,36 +231,84 @@ def charger_modeles(dossier=DOSSIER_VILLES):
     return joblib.load(chemin) if chemin.exists() else None
 
 
+def _verifier_coordonnees(latitude, longitude):
+    """Refuse des coordonnées qui ne sont pas des nombres, ou hors des limites du globe."""
+    if not (math.isfinite(latitude) and math.isfinite(longitude)):
+        raise ParametreInvalide("La latitude et la longitude doivent être des nombres.")
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        raise ParametreInvalide(
+            "Coordonnées hors limites : la latitude doit être entre -90 et 90 et la longitude entre -180 et 180 "
+            f"(reçu : {latitude:.6g}, {longitude:.6g})."
+        )
+
+
+def _verifier_adresse(modeles, code, nom, latitude, longitude):
+    """Vérifie que la position se trouve bien dans la commune demandée (arrondissement compris).
+
+    La commune d'une position est celle de ses ventes voisines (voir NB_VOISINS). Pour une ville
+    découpée en arrondissements (« Paris »), les arrondissements comptent comme la ville.
+    """
+    voisins = modeles.get("voisins")
+    if voisins is None:  # fichier de modèle d'une ancienne version : contrôle par zone, moins précis
+        zone = modeles["zones"].get(code)
+        marge = 0.03
+        if zone and not (zone[0] - marge <= latitude <= zone[1] + marge and zone[2] - marge <= longitude <= zone[3] + marge):
+            raise ParametreInvalide(f"Cette adresse ne se trouve pas à {nom}.")
+        return
+
+    distances, indices = voisins["index"].kneighbors([_projeter(latitude, longitude)])
+    if distances[0][0] > DISTANCE_MAX_DEGRES:
+        raise ParametreInvalide("Cette position est en dehors des villes couvertes.")
+    codes_voisins = [modeles["communes"][i] for i in voisins["etiquettes"][indices[0]]]
+    acceptes = {code, *modeles.get("enfants", {}).get(code, [])}
+    if sum(c in acceptes for c in codes_voisins) >= VOTES_MIN:
+        return
+    ou = modeles.get("noms", {}).get(Counter(codes_voisins).most_common(1)[0][0], "une autre commune")
+    raise ParametreInvalide(f"Cette adresse se trouve à {ou}, pas à {nom}.")
+
+
+def _verifier_surface(modeles, type_local, surface):
+    """Refuse une surface que le modèle n'a jamais vue dans les ventes de ce type de bien."""
+    bornes = modeles.get("surfaces", {}).get(type_local)
+    if bornes and not bornes[0] <= surface <= bornes[1]:
+        bien = "un appartement" if type_local == "Appartement" else "une maison"
+        raise ParametreInvalide(
+            f"La surface d'{bien} doit être comprise entre {bornes[0]} et {bornes[1]} m² "
+            f"pour une estimation fiable (reçu : {surface:.10g})."
+        )
+
+
 def estimer_prix(prix, modeles, commune, type_local, surface, latitude=None, longitude=None):
     """Estime une fourchette de prix avec le meilleur modèle disponible pour la demande.
 
     - latitude et longitude donnés (l'adresse du bien) : le modèle « adresse », méthode "adresse".
     - sinon, une commune que le modèle connaît : le modèle « commune », méthode "commune".
-    - sinon (« Paris » en entier, ou pas de modèle) : les médianes et quartiles de estimation.estimer(),
-      méthode "mediane".
+    - sinon (« Paris » en entier, une commune qui manque de ventes de ce type de bien, ou pas de
+      modèle) : les médianes et quartiles de estimation.estimer(), méthode "mediane".
     Renvoie le même dictionnaire que estimation.estimer(), plus la clé methode. Les ventes comptées
-    (nombre_ventes, annee_min, annee_max) sont celles des statistiques de la commune.
+    (nombre_ventes, annee_min, annee_max) sont celles des statistiques de la commune ; le champ repli
+    nomme la ville dont les statistiques remplacent celles d'une commune qui manque de ventes.
     Lève les mêmes ValueError que estimation.estimer(), et ParametreInvalide si une seule des deux
-    coordonnées est donnée, si elles sont invalides, ou si l'adresse n'est pas dans la commune.
+    coordonnées est donnée, si elles sont invalides, si l'adresse n'est pas dans la commune ou si la
+    surface sort de ce que les ventes ont montré.
     """
     if (latitude is None) != (longitude is None):
         raise ParametreInvalide("La latitude et la longitude vont ensemble : donner les deux ou aucune.")
 
-    ligne = chercher_ligne(prix, commune, type_local, surface)
-    code = ligne["code_commune"]
+    ligne, repli = chercher_ligne_avec_repli(prix, commune, type_local, surface)
+    code = ligne["code_commune_demandee"]
 
     if latitude is not None:
-        if not (math.isfinite(latitude) and math.isfinite(longitude)):
-            raise ParametreInvalide("La latitude et la longitude doivent être des nombres.")
-        if modeles is not None and code in modeles["zones"]:
-            lat_min, lat_max, lon_min, lon_max = modeles["zones"][code]
-            if not (lat_min - MARGE_DEGRES <= latitude <= lat_max + MARGE_DEGRES
-                    and lon_min - MARGE_DEGRES <= longitude <= lon_max + MARGE_DEGRES):
-                raise ParametreInvalide(f"Cette adresse ne se trouve pas à {ligne['nom_commune']}.")
+        _verifier_coordonnees(latitude, longitude)
+        if modeles is not None:
+            _verifier_adresse(modeles, code, ligne["nom_commune"], latitude, longitude)
 
-    if modeles is None or (latitude is None and code not in modeles["communes"]):
+    # Sans modèle, ou si la commune manque de ventes (on se replie alors sur la médiane de la ville),
+    # ou pour une ville entière sans adresse : les statistiques de la commune.
+    if modeles is None or repli is not None or (latitude is None and code not in modeles["communes"]):
         return {**estimer(prix, commune, type_local, surface), "methode": "mediane"}
 
+    _verifier_surface(modeles, ligne["type_local"], surface)
     methode = "adresse" if latitude is not None else "commune"
     demande = pd.DataFrame([{
         "code_commune": code, "type_local": ligne["type_local"], "surface_reelle_bati": surface,
@@ -229,9 +324,10 @@ def estimer_prix(prix, modeles, commune, type_local, surface, latitude=None, lon
         "nombre_ventes": int(ligne["nombre_ventes"]),
         "annee_min": int(ligne["annee_min"]),
         "annee_max": int(ligne["annee_max"]),
-        "prix_m2_median": milieu,
-        "prix_bas": surface * bas,
-        "prix_median": surface * milieu,
-        "prix_haut": surface * haut,
+        "prix_m2_median": round(milieu),
+        "prix_bas": round(surface * bas),
+        "prix_median": round(surface * milieu),
+        "prix_haut": round(surface * haut),
+        "repli": None,
         "methode": methode,
     }
