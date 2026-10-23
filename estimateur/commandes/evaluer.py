@@ -11,9 +11,17 @@ import pandas as pd
 
 from ..config import DOSSIER_VILLES
 from ..modele import (
-    ANNEE_TEST, VARIABLES_ADRESSE, VARIABLES_COMMUNE, VARIABLES_COMPLET, VARIABLES_PIECES,
-    charger_ventes, entrainer, mesurer_erreur, mesurer_fourchette,
-    predire_par_groupe, separer_par_annee,
+    ANNEE_TEST,
+    VARIABLES_ADRESSE,
+    VARIABLES_COMMUNE,
+    VARIABLES_COMPLET,
+    VARIABLES_PIECES,
+    charger_ventes,
+    entrainer,
+    mesurer_erreur,
+    mesurer_fourchette,
+    predire_par_groupe,
+    separer_par_annee,
 )
 from ..villes import VILLE_DE
 

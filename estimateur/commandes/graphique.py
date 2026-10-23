@@ -86,8 +86,8 @@ def executer(args):
         x=0.02, ha="left", fontsize=14, fontweight="bold", color=ENCRE,
     )
     annees = f"{prix['annee_min'].min()} à {prix['annee_max'].max()}"
-    fig.text(0.02, 0.945, f"Médiane du prix au m² des ventes DVF de {annees}. Seules les villes avec au moins {VENTES_MIN} ventes de ce type de bien sont classées.",
-             ha="left", fontsize=9.5, color=ENCRE_SECONDAIRE)
+    legende = f"Médiane du prix au m² des ventes DVF de {annees}. Seules les villes avec au moins {VENTES_MIN} ventes de ce type de bien sont classées."
+    fig.text(0.02, 0.945, legende, ha="left", fontsize=9.5, color=ENCRE_SECONDAIRE)
     fig.tight_layout(rect=(0, 0, 1, 0.94), h_pad=2.5)
 
     SORTIE.parent.mkdir(exist_ok=True)

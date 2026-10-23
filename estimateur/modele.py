@@ -161,6 +161,8 @@ def zones_communes(ventes, regroupements=None):
         zones[code] = (groupe["latitude"].min(), groupe["latitude"].max(), groupe["longitude"].min(), groupe["longitude"].max())
     for code, (_, codes) in (regroupements or {}).items():
         morceaux = [zones[c] for c in codes if c in zones]
+        if not morceaux:  # aucune vente dans les communes de ce regroupement : pas de zone
+            continue
         zones[code] = (min(z[0] for z in morceaux), max(z[1] for z in morceaux), min(z[2] for z in morceaux), max(z[3] for z in morceaux))
     return zones
 
@@ -185,7 +187,7 @@ def entrainer_modeles(ventes, regroupements=None, metriques=None):
 
     avec_position = ventes.dropna(subset=["latitude", "longitude"])
     index_des_communes = {code: i for i, code in enumerate(communes)}
-    positions = np.array([_projeter(la, lo) for la, lo in zip(avec_position["latitude"], avec_position["longitude"])])
+    positions = np.array([_projeter(la, lo) for la, lo in zip(avec_position["latitude"], avec_position["longitude"], strict=True)])
     voisins = {
         "index": NearestNeighbors(n_neighbors=NB_VOISINS, algorithm="kd_tree").fit(positions),
         "etiquettes": avec_position["code_commune"].map(index_des_communes).to_numpy(dtype=np.int16),
