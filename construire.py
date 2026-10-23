@@ -5,6 +5,7 @@
   prix_communes.csv  : les statistiques par commune et par type de bien (pour l'API)
 
 À lancer depuis la racine du projet : python construire.py
+Ensuite : python evaluer.py (mesure les modèles), puis python modeliser.py (entraîne le modèle final).
 """
 
 import logging
@@ -12,10 +13,15 @@ import logging
 import pandas as pd
 
 from immo import DATA_DIR, charger, nettoyer, prix_par_commune, regrouper_communes, telecharger
-from villes import VILLES, codes_du_departement, departements, regroupements
+from villes import VILLE_DE, VILLES, codes_du_departement, departements, regroupements
 
 DOSSIER = DATA_DIR / "villes"
 ANNEES = range(2021, 2026)
+
+# Les statistiques par commune (médiane, quartiles) ne portent que sur les années récentes :
+# les prix bougent, et une médiane sur cinq ans estime moins bien l'année suivante qu'une
+# médiane sur la dernière année (voir evaluer.py).
+ANNEES_STATS = (2024, 2025)
 
 # Les prix dépassent souvent 10 000 €/m² à Paris : le plafond absolu ne sert que de garde-fou,
 # et l'écart à la médiane de la commune fait le tri.
@@ -43,7 +49,9 @@ def main():
     ventes = pd.concat(ventes, ignore_index=True)
     ventes[COLONNES_VENTES].to_csv(DOSSIER / "ventes_propres.csv", index=False)
 
-    prix = prix_par_commune(regrouper_communes(ventes, regroupements()))
+    recentes = ventes[ventes["annee"].isin(ANNEES_STATS)]
+    prix = prix_par_commune(regrouper_communes(recentes, regroupements()))
+    prix["ville"] = prix["code_commune"].map(VILLE_DE)
     prix.to_csv(DOSSIER / "prix_communes.csv", index=False)
 
     print(f"\n{len(ventes)} ventes retenues, {len(prix)} lignes dans prix_communes.csv")

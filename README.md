@@ -1,229 +1,290 @@
 # estimateur-immo
 
-Estime une fourchette de prix pour un bien (maison ou appartement) dans une commune, à partir des
-ventes réellement enregistrées dans les **Demandes de valeurs foncières géolocalisées (DVF)**
-publiées sur data.gouv.fr.
+Estime une fourchette de prix pour un bien (maison ou appartement) dans l'une des dix plus grandes
+villes de France, à partir des ventes réellement enregistrées dans les **Demandes de valeurs
+foncières géolocalisées (DVF)** publiées sur data.gouv.fr. Les estimations viennent d'un modèle
+de machine learning (scikit-learn) dont l'erreur est mesurée sur des ventes qu'il n'a jamais vues,
+et comparée à une simple médiane par commune.
 
 ```powershell
-python estimer.py --commune Reims --type Appartement --surface 65
+python estimer.py --commune "Lyon 3e Arrondissement" --type Appartement --surface 65 --latitude 45.7578 --longitude 4.8520
 ```
 
 ```
-Reims - Appartement, 65 m²
-Fourchette estimée : 134 000 € à 207 000 €
-Prix médian : 170 000 € (2 613 €/m²)
-Basé sur 5329 ventes de 2023 à 2025.
+Lyon 3e Arrondissement - Appartement, 65 m²
+Fourchette estimée : 258 000 € à 319 000 €
+Prix médian : 291 000 € (4 478 €/m²)
+Méthode : modèle tenant compte de l'adresse. Statistiques de la commune : 2519 ventes de 2024 à 2025.
 ```
 
-État actuel, testé sur le département de la Marne (51), ventes de 2023 à 2025 :
+Une API HTTP (FastAPI) expose les mêmes fonctions : `https://api.tatane.me`.
 
-| Fonctionnalité | Statut |
-|---|---|
-| Chargement des fichiers DVF d'un département, sur plusieurs années | fait |
-| Nettoyage des ventes (maisons et appartements, prix au m²) | fait |
-| Statistiques de prix par commune et par type de bien | fait |
-| Outil en ligne de commande `estimer.py` | fait |
-| Graphique des communes les plus chères | fait |
-| API (FastAPI) réutilisant les mêmes fonctions | à venir |
+## Ce que le modèle apporte
 
-![Communes les plus chères du département 51](docs/communes_les_plus_cheres.png)
+Entraînement sur les ventes de 2021 à 2024, test sur les **83 310 ventes de 2025** : le modèle ne
+voit jamais le prix des ventes qu'il estime. L'erreur est celle du prix au m² ; la fourchette est
+l'intervalle entre le 25e et le 75e centile, qui doit contenir 50 % des ventes réelles.
+
+| Méthode | Erreur médiane | Erreur moyenne (€/m²) | Largeur de la fourchette | Part des ventes dans la fourchette |
+|---|---:|---:|---:|---:|
+| Médiane de la commune, toutes les années | 18,2 % | 1 359 | 36,5 % | 49,8 % |
+| Médiane de la commune, dernière année (référence) | 17,4 % | 1 313 | 37,5 % | 50,9 % |
+| Modèle « commune » : commune, type, surface, année | 16,5 % | 1 261 | 34,3 % | 50,4 % |
+| Modèle « commune » + pièces et terrain | 16,2 % | 1 245 | 33,2 % | 50,4 % |
+| **Modèle « adresse » : type, surface, année, position** | **13,9 %** | **1 129** | **28,3 %** | **50,1 %** |
+| Modèle complet (plafond) | 13,7 % | 1 118 | 27,7 % | 49,9 % |
+
+Ce que ces mesures montrent :
+
+- **La position du bien est ce qui compte.** Avec l'adresse, l'erreur médiane passe de 17,4 % à
+  13,9 % par rapport à la meilleure référence, et la fourchette se resserre de 25 % à couverture
+  égale. Le nombre de pièces et la surface du terrain n'apportent presque rien : le formulaire ne
+  les demande donc pas.
+- **Les prix récents comptent.** Une médiane sur la dernière année estime mieux 2025 qu'une médiane
+  sur quatre ans, et l'année est une variable du modèle.
+- **Le gain varie selon la ville.** Avec l'adresse, l'erreur médiane de Toulouse passe de 22,2 % à
+  13,3 % et celle de Lille de 19,8 % à 14,1 % ; celle de Paris, déjà régulière, de 13,7 % à 12,3 %.
+- **Les fourchettes sont calibrées** : dans chaque méthode, environ la moitié des ventes réelles
+  tombent dans l'intervalle annoncé.
+
+![Prix au m² dans les 10 grandes villes](docs/villes_les_plus_cheres.png)
 
 ## Le trajet des données
 
-Tout part des fichiers bruts et se transforme en trois temps. Chaque flèche est une fonction
-de `immo.py`.
-
 ```
- data/51 2023.csv
- data/51 2024.csv           tableau brut               ventes propres              statistiques
- data/51 2025.csv           86 538 lignes              17 562 lignes               656 lignes
-      │                          │                          │                          │
-      │   charger("51")          │   nettoyer(df)           │   prix_par_commune(df)   │
-      └────────────────────────► └────────────────────────► └────────────────────────► └──► data/prix_communes.csv
-                                                                                                    │
-                                                         estimer(...)  et  classer_communes(...) ◄──┘
-                                                         (estimation d'un bien)   (classement des communes)
+ data/villes/75 2021.csv … 75 2025.csv     (un fichier DVF par département et par année,
+ data/villes/13 2021.csv … 13 2025.csv      téléchargés par construire.py : 10 départements)
+              │
+              │  python construire.py   telecharger → charger → nettoyer → regrouper_communes → prix_par_commune
+              ▼
+ data/villes/ventes_propres.csv   (432 579 ventes, une ligne par vente)     data/villes/prix_communes.csv   (statistiques par commune)
+              │                                                                          │
+              │  python evaluer.py   (mesure les modèles, écrit evaluation.json)         │
+              │  python modeliser.py (entraîne les modèles finaux)                       │
+              ▼                                                                          │
+ data/villes/modeles.joblib ───────────────────────────────────────────────┐            │
+                                                                            ▼            ▼
+                                                   estimer.py (terminal) · api.py (HTTP) · graphique.py
 ```
 
-Les fichiers d'origine ne sont **jamais modifiés**. Les fonctions travaillent sur des copies en
-mémoire. Seuls `data/prix_communes.csv` et l'image du graphique sont écrits.
+Les fichiers d'origine ne sont **jamais modifiés** : les fonctions travaillent sur des copies en
+mémoire. `data/` est ignoré par Git.
 
 ## Qui fait quoi, qui appelle qui
 
 ```
 estimateur-immo/
-├── data/                 fichiers de données, ignorés par Git
-│   ├── 51 2023.csv       entrées : un fichier DVF par département et par année
-│   ├── 51 2024.csv       (téléchargés à la main, nommés « <département> <année>.csv »)
-│   ├── 51 2025.csv
-│   └── prix_communes.csv sortie : les statistiques par commune (créé par explorer.py)
-├── docs/
-│   └── communes_les_plus_cheres.png   le graphique (créé par graphique.py)
+├── data/                  données, ignorées par Git (sous-dossier villes/ : celles du projet)
+├── docs/                  le graphique
 │
-├── immo.py               LA LOGIQUE : toutes les fonctions
-├── explorer.py           script : explore les données et produit prix_communes.csv
-├── estimer.py            script : l'outil en ligne de commande
-├── graphique.py          script : trace le graphique
-├── api.py                l'API HTTP (FastAPI) : appelle immo.py pour le site
-├── Dockerfile            l'image Docker de l'API (code seul, sans les données)
-├── .dockerignore         liste blanche des fichiers envoyés à Docker
-├── docker-compose.yml    lance l'API et Caddy (HTTPS) ensemble
-├── Caddyfile             configuration de Caddy : domaine et redirection vers l'API
-├── requirements.txt      toutes les bibliothèques du projet (développement)
-├── requirements-api.txt  seulement celles dont l'API a besoin (utilisé par le Dockerfile)
+├── immo.py                LA LOGIQUE des données : télécharger, charger, nettoyer, agréger, estimer par médiane
+├── modele.py              LA LOGIQUE du modèle : séparation par année, référence, entraînement, mesures, estimation
+├── villes.py              la liste des dix villes, avec leurs codes de commune
+│
+├── construire.py          script : télécharge et prépare les données
+├── evaluer.py             script : compare les modèles à la référence sur 2025
+├── modeliser.py           script : entraîne et enregistre les modèles finaux
+├── estimer.py             script : l'outil en ligne de commande
+├── graphique.py           script : trace le graphique
+├── explorer.py            script : explore les fichiers DVF d'un département (diagnostics)
+├── api.py                 l'API HTTP (FastAPI) : appelle modele.py et immo.py pour le site
+│
+├── Dockerfile             l'image Docker de l'API (code seul, sans les données)
+├── .dockerignore          liste blanche des fichiers envoyés à Docker
+├── docker-compose.yml     lance l'API et Caddy (HTTPS) ensemble
+├── Caddyfile              configuration de Caddy : domaine et redirection vers l'API
+├── requirements.txt       toutes les bibliothèques du projet (développement)
+├── requirements-api.txt   seulement celles dont l'API a besoin (utilisé par le Dockerfile)
 └── README.md
 ```
 
 ```
- explorer.py ───┐                        ┌──► data/<département> <année>.csv   (lecture)
- estimer.py  ───┤                        │
- graphique.py ──┼── importent immo.py ───┤
- api.py ────────┘                        └──► data/prix_communes.csv           (lecture)
-
- écritures : explorer.py  → data/prix_communes.csv
-             graphique.py → docs/communes_les_plus_cheres.png
+ construire.py ─┐
+ evaluer.py ────┤
+ modeliser.py ──┼── importent immo.py, modele.py et villes.py
+ estimer.py ────┤
+ graphique.py ──┤
+ api.py ────────┘
 ```
 
-- **`immo.py` fait le travail.** Il contient les fonctions, et seulement elles. Il ne lit pas
-  d'arguments de terminal et ne fait ni `print`, ni `input`, ni `sys.exit` : il reçoit des
-  paramètres et renvoie des valeurs ou lève des exceptions. Le département, les années, le dossier
-  des données et les seuils sont des paramètres, jamais écrits en dur dans les calculs.
+- **`immo.py` et `modele.py` font le travail.** Ils contiennent les fonctions, et seulement elles.
+  Ils ne lisent pas d'arguments de terminal et ne font ni `print`, ni `input`, ni `sys.exit` : ils
+  reçoivent des paramètres et renvoient des valeurs ou lèvent des exceptions. Les départements, les
+  années, les dossiers et les seuils sont des paramètres.
 - **Les scripts et l'API sont des « façades ».** Chacun lit ses entrées (arguments du terminal,
-  requête HTTP, constantes), appelle les fonctions de `immo.py` et présente le résultat. Ils n'ont
-  aucune logique de calcul propre.
-- **Pourquoi cette séparation :** la logique est écrite une seule fois. L'API l'appelle comme le
-  fait le terminal. Les erreurs de `estimer()` sont des `ValueError` : le terminal les affiche,
-  l'API les transforme en réponse HTTP 404 ou 422.
+  requête HTTP, constantes), appelle ces fonctions et présente le résultat. Ils n'ont aucune
+  logique de calcul propre.
+- **Pourquoi cette séparation :** la logique est écrite une seule fois, le terminal et l'API la
+  partagent, et les erreurs sont des exceptions que chaque façade traduit à sa manière (un message
+  dans le terminal, un code HTTP 404, 422 ou 429 pour l'API).
 
-### Ordre d'utilisation
+## Les données
 
-1. `python explorer.py` lit les fichiers DVF, nettoie, agrège et écrit `data/prix_communes.csv`.
-   Il affiche aussi des diagnostics sur les données (taille, types de biens, cases vides) et ce
-   que retire chaque étape du nettoyage.
-2. `python estimer.py ...` et `python graphique.py` lisent ensuite `data/prix_communes.csv`.
+- Source : DVF géolocalisées sur data.gouv.fr, un fichier CSV par département et par année.
+  `telecharger()` les récupère (environ 100 Mo compressés pour dix départements et cinq ans).
+- Les dix villes : Paris, Marseille, Lyon, Toulouse, Nice, Nantes, Montpellier, Bordeaux, Lille et
+  Rennes. **Strasbourg n'en fait pas partie** : l'Alsace-Moselle (57, 67, 68) n'est pas couverte par
+  DVF. Rennes, onzième ville de France, la remplace.
+- **Paris, Lyon et Marseille sont découpées en arrondissements** dans DVF (`Paris 10e Arrondissement`,
+  code 75110). Le projet garde les arrondissements et ajoute la ville entière (`Paris`).
+- Une ligne du fichier n'est **pas** une vente : c'est une parcelle ou un lot d'une vente. Une même
+  vente peut occuper plusieurs lignes qui partagent le même `id_mutation`, et `valeur_fonciere`
+  répète le prix total sur chacune.
+- Colonnes utilisées : `id_mutation`, `date_mutation`, `nature_mutation`, `valeur_fonciere`,
+  `code_commune`, `nom_commune`, `type_local`, `surface_reelle_bati`, `nombre_pieces_principales`,
+  `surface_terrain`, `latitude`, `longitude`.
 
 ## Les fonctions de `immo.py`
+
+### `telecharger(departement, annees=(2023, 2024, 2025), dossier=data/)`
+
+Télécharge les fichiers DVF d'un département vers `<dossier>/<departement> <annee>.csv`. Un fichier
+déjà présent n'est pas retéléchargé, et un téléchargement interrompu ne laisse jamais de fichier
+tronqué (écriture sous un nom provisoire, puis renommage). Lève une `FileNotFoundError` si le
+fichier n'existe pas sur data.gouv.fr.
 
 ### `charger(departement, annees=(2023, 2024, 2025), dossier=data/)`
 
 Lit les fichiers `<dossier>/<departement> <annee>.csv` et les empile en un seul tableau brut,
 sans rien filtrer. Une colonne `annee` indique de quel fichier vient chaque ligne. Les codes de
 département, de commune et postal sont lus comme du **texte** : sinon `01` deviendrait `1`, et
-`2A`/`2B` (Corse) poseraient problème. Les `id_mutation` commencent par l'année
-(`2025-653539`) : deux fichiers ne peuvent pas avoir le même identifiant de vente.
+`2A`/`2B` (Corse) poseraient problème.
 
-### `nettoyer(df, prix_m2_min=300, prix_m2_max=10000)`
+### `nettoyer(df, prix_m2_min=300, prix_m2_max=10000, ecart_median=None)`
 
-Garde uniquement les ventes exploitables pour estimer un prix au m² et ajoute la colonne
-`prix_m2`. Ce que retire chaque étape est noté dans le journal du module (`logging`, niveau
-INFO) : rien ne s'affiche tant que le programme appelant n'active pas les messages, comme le fait
-`explorer.py`. Résultat sur le département 51, années 2023 à 2025 :
+Garde les ventes d'un seul logement (maison ou appartement) au prix au m² plausible. Chaque étape
+note dans le journal (`logging`, niveau INFO) combien de lignes elle retire :
 
-| # | Filtre | Pourquoi | Lignes retirées | Restantes |
-|---|---|---|---:|---:|
-| | Fichiers bruts | | | 86 538 |
-| 1 | `type_local` = Maison ou Appartement | Les terrains, dépendances et locaux professionnels n'ont pas de surface de logement | 62 814 | 23 724 |
-| 2 | `nature_mutation` = Vente | Échanges, adjudications et ventes sur plan n'ont pas un prix comparable | 672 | 23 052 |
-| 3 | Prix > 0 et surface > 0 | Un prix ou une surface vide ou nul ne permet pas de calcul | 34 | 23 018 |
-| 4 | Une seule ligne par vente | Voir ci-dessous | 5 245 | 17 773 |
-| 5 | Prix au m² entre 300 et 10 000 € | Écarte les ventes symboliques (1 €) et les erreurs de saisie (180 000 €/m²) | 211 | 17 562 |
+1. **Maisons et appartements seulement** : on retire terrains, dépendances, locaux professionnels et
+   lignes sans `type_local`.
+2. **Ventes classiques** (`nature_mutation = "Vente"`) : on retire échanges, adjudications, ventes
+   sur plan (VEFA) et ventes de terrain à bâtir, dont le prix n'est pas comparable.
+3. **Prix et surface strictement positifs**.
+4. **Une seule ligne de logement par vente** : avec deux logements dans la même vente, on ne saurait
+   pas quel prix revient à quel logement. La règle s'applique après les étapes 1 à 3 : une maison
+   vendue avec un garage ou un terrain reste une vente à un seul logement. Selon la ville, elle
+   retire de l'ordre de 10 à 25 % des lignes restantes.
+5. **Prix au m² entre `prix_m2_min` et `prix_m2_max`** : retire les ventes symboliques (1 €) et les
+   erreurs de saisie.
+6. **Facultatif, `ecart_median`** : retire aussi les ventes dont le prix au m² sort de l'intervalle
+   [médiane / `ecart_median`, médiane × `ecart_median`] de leur commune et de leur type de bien.
+   Des seuils fixes ne conviennent pas à des villes aux prix très différents : 10 000 €/m² est une
+   valeur aberrante dans la Marne et un prix courant à Paris, où un plafond à 10 000 aurait retiré
+   45 % des ventes. `construire.py` utilise un plafond de garde-fou à 50 000 et un écart de 3.
 
-**Pourquoi « une seule ligne par vente » ?** Dans le fichier DVF, une vente (`id_mutation`)
-occupe une ligne par parcelle ou par lot, et la colonne `valeur_fonciere` y répète le prix
-**total**. Pour une vente de deux logements, on ne peut pas savoir quelle part du prix revient à
-chacun. On ne garde donc que les ventes qui n'ont qu'un seul logement.
+Renvoie un nouveau tableau avec une colonne `prix_m2` en plus.
 
-Le comptage se fait **après** le filtre sur les maisons et appartements : une maison vendue
-avec un garage ou un terrain reste une vente à un seul logement.
+### `regrouper_communes(df, regroupements)`
 
-**Limite connue :** parmi les ventes à plusieurs lignes (1 868 sur ces trois années), environ la
-moitié (914) ne contiennent en réalité qu'un seul logement, répété sur plusieurs parcelles. Elles
-sont écartées avec les autres. C'est prudent, et il reste assez de données, mais ce n'est pas
-parfait.
+Ajoute les ventes de plusieurs communes sous un seul nom : `Paris` en entier, à côté de ses vingt
+arrondissements. Les ventes d'origine sont conservées.
 
 ### `prix_par_commune(df)`
 
-Reçoit les ventes propres et renvoie une ligne par **commune et par type de bien** (une
-médiane mêlant maisons et appartements n'aurait pas de sens). Colonnes :
-
-| Colonne | Contenu |
-|---|---|
-| `code_commune` | Code INSEE, identifiant unique de la commune |
-| `nom_commune` | Nom, pour l'affichage |
-| `type_local` | `Maison` ou `Appartement` |
-| `mediane` | Médiane du prix au m² |
-| `quartile_1`, `quartile_3` | 1er et 3e quartile : 25 % des ventes sont en dessous du premier, 25 % au-dessus du second |
-| `nombre_ventes` | Nombre de ventes sur lesquelles reposent ces chiffres |
-| `annee_min`, `annee_max` | Première et dernière année des ventes prises en compte |
-
-Sur le département 51 : 656 lignes (586 maisons, 70 appartements).
+Pour chaque commune et chaque type de bien : médiane, 1er et 3e quartile du prix au m², nombre de
+ventes, première et dernière année. Les statistiques de `construire.py` portent sur 2024 et 2025.
 
 ### `charger_prix_communes(dossier=data/)`
 
 Relit `prix_communes.csv`. Si le fichier n'existe pas, lève une `FileNotFoundError` qui indique
 comment le générer.
 
-### `estimer(prix, commune, type_local, surface, ventes_min=10)`
+### `chercher_ligne(...)` et `estimer(prix, commune, type_local, surface, ventes_min=10)`
 
-Cherche la commune et le type de bien dans le tableau des statistiques et renvoie un
-dictionnaire : `prix_bas` (surface × 1er quartile), `prix_median`, `prix_haut` (surface × 3e
-quartile), `prix_m2_median`, `nombre_ventes`, `annee_min`, `annee_max`, `commune`, `type_local`,
-`surface`.
+`chercher_ligne` vérifie la demande et trouve la ligne de statistiques de la commune ; `estimer`
+en tire un dictionnaire : `prix_bas` (surface × 1er quartile), `prix_median`, `prix_haut` (surface ×
+3e quartile), `prix_m2_median`, `nombre_ventes`, `annee_min`, `annee_max`, `commune`, `type_local`,
+`surface`. C'est la méthode de repli du projet : médianes et quartiles, sans modèle.
 
 Le nom de la commune est comparé sans tenir compte de la casse, des accents ni des tirets :
-`epernay`, `ÉPERNAY` et `Épernay` désignent la même commune, comme `chalons en champagne` et
-`Châlons-en-Champagne`.
+`epernay`, `ÉPERNAY` et `Épernay` désignent la même commune.
 
-Erreurs, toutes levées en `ValueError` avec un message lisible. Deux sous-classes les distinguent :
-`ParametreInvalide` (la requête est incorrecte) et `BienIntrouvable` (la requête est correcte,
-mais les données ne permettent pas de répondre). L'API en tire le code HTTP.
+Erreurs, toutes des `ValueError` au message lisible. Deux sous-classes les distinguent :
+`ParametreInvalide` (la requête est incorrecte) et `BienIntrouvable` (la requête est correcte, mais
+les données ne permettent pas de répondre). L'API en tire le code HTTP.
 
-| Cas | Exception | Message (extrait) | Code HTTP |
-|---|---|---|---|
-| Surface hors de 0 à 10 000 m² (ou `nan`, `inf`) | `ParametreInvalide` | La surface doit être comprise entre 0 et 10000 m² | 422 |
-| Type de bien autre que Maison ou Appartement | `ParametreInvalide` | Type de bien inconnu | 422 |
-| Plusieurs communes de même nom | `ParametreInvalide` | Plusieurs communes s'appellent ... (codes ...) | 422 |
-| Nom de commune absent du tableau | `BienIntrouvable` | Commune introuvable | 404 |
-| Commune sans vente de ce type de bien | `BienIntrouvable` | Aucune vente exploitable de maison à ... | 404 |
-| Moins de 10 ventes | `BienIntrouvable` | Seulement N vente(s) ... : il en faut au moins 10 | 404 |
+| Cas | Exception | Code HTTP |
+|---|---|---|
+| Surface hors de 0 à 10 000 m² (ou `nan`, `inf`) | `ParametreInvalide` | 422 |
+| Type de bien autre que Maison ou Appartement | `ParametreInvalide` | 422 |
+| Plusieurs communes de même nom | `ParametreInvalide` | 422 |
+| Nom de commune absent du tableau | `BienIntrouvable` | 404 |
+| Commune sans vente de ce type de bien | `BienIntrouvable` | 404 |
+| Moins de 10 ventes | `BienIntrouvable` | 404 |
 
-### `noms_communes(prix)` et `zone_couverte(prix)`
+### `noms_communes(prix)`, `zone_couverte(prix)` et `classer_communes(prix, type_local)`
 
-`noms_communes` renvoie les noms des communes du tableau, sans doublon, triés sans tenir compte
-des accents. `zone_couverte` décrit ce que couvrent les données : les départements (déduits des
-codes de commune), la première et la dernière année, le nombre de communes. Rien n'est écrit en
-dur : changer de département ou d'années change la réponse. Les deux servent à l'API
-(`/communes` et `/info`).
+`noms_communes` renvoie les noms des communes, triés sans tenir compte des accents. `zone_couverte`
+décrit ce que couvrent les données (départements, villes, années, nombre de communes) : tout est
+déduit du tableau, rien n'est écrit en dur. `classer_communes` classe les communes d'un type de bien
+par prix médian, en ne gardant que celles qui comptent assez de ventes.
 
-### `classer_communes(prix, type_local, ventes_min=10)`
+## Le modèle (`modele.py`)
 
-Classe les communes d'un type de bien de la plus chère à la moins chère (médiane du prix au
-m²), en ne gardant que celles qui comptent assez de ventes. Utilisée par `graphique.py`.
+**Cible : le prix au m²**, plus stable d'un bien à l'autre que le prix total (on multiplie ensuite
+par la surface). **Algorithme : `HistGradientBoostingRegressor`** (scikit-learn), des arbres de
+décision enchaînés qui acceptent les cases vides et les catégories. Pour obtenir une fourchette, on
+entraîne trois modèles par variante, avec la perte « quantile » : 25e centile, médiane, 75e centile.
+
+Deux variantes sont déployées :
+
+- **Modèle « commune »** (commune, type de bien, surface, année) : le formulaire de base.
+- **Modèle « adresse »** (type de bien, surface, année, latitude, longitude) : si la requête fournit
+  la position du bien. La commune n'est alors plus une variable, la position la remplace.
+
+**Méthode utilisée pour une demande** (champ `methode` de la réponse) :
+
+| Méthode | Quand |
+|---|---|
+| `adresse` | `latitude` et `longitude` fournies |
+| `commune` | pas d'adresse, et une commune que le modèle connaît (un arrondissement, ou une ville sans arrondissements) |
+| `mediane` | « Paris », « Lyon » ou « Marseille » en entier sans adresse (le modèle ne les connaît que par arrondissement), ou fichier du modèle absent |
+
+Une adresse est refusée (422) si elle ne se trouve pas dans la zone des ventes de la commune demandée
+(marge de 3 km) : une adresse de Bordeaux pour la commune de Lille, par exemple. La règle des 10
+ventes minimum de la commune et du type de bien s'applique aussi avec une adresse.
+
+**Protocole d'évaluation** (`evaluer.py`) :
+
+- **Séparation temporelle.** Entraînement sur 2021 à 2024, test sur 2025 : on prédit l'avenir à
+  partir du passé, jamais l'inverse, et jamais un tirage au hasard qui mélangerait les années.
+- **Pas de fuite de données.** Les médianes de la référence sont calculées sur l'entraînement
+  seulement, et les modèles ne voient pas le prix de 2025.
+- **Pas de réglage sur le jeu de test.** Les hyperparamètres sont ceux par défaut de scikit-learn,
+  sauf 300 itérations : régler sur 2025 le rendrait trop optimiste.
+- **Comparaison avec une référence forte.** La référence est la médiane de la dernière année, pas
+  celle de toutes les années.
+- **Des mesures par ville et par type de bien**, car un bon résultat global peut cacher un échec
+  local.
+
+Les mesures sont écrites dans `data/villes/evaluation.json`, gardées avec le modèle et affichées
+par l'API (`/info`). Le modèle final (`modeliser.py`) est ensuite entraîné sur toutes les années,
+2025 comprise.
 
 ## Les scripts
 
-### `estimer.py`
-
 ```powershell
-python estimer.py --commune Épernay --type Maison --surface 110
+python construire.py     # télécharge, nettoie, agrège : ventes_propres.csv et prix_communes.csv
+python evaluer.py        # compare les modèles à la référence sur 2025 : evaluation.json
+python modeliser.py      # entraîne les modèles finaux : modeles.joblib
+python estimer.py --commune Lyon --type Appartement --surface 65
 python estimer.py -h
+python graphique.py      # docs/villes_les_plus_cheres.png
 ```
 
-Les trois arguments sont obligatoires. En cas d'erreur, le message est affiché sur la sortie
-d'erreur et le code de retour vaut 1, sans trace d'erreur Python.
+`estimer.py` accepte aussi `--latitude` et `--longitude`. En cas d'erreur, le message est affiché
+sur la sortie d'erreur et le code de retour vaut 1, sans trace d'erreur Python.
 
-### `graphique.py`
-
-Trace deux classements en barres horizontales, un pour les maisons et un pour les appartements
-(les 15 communes les plus chères de chaque type), avec la médiane du prix au m² et le nombre de
-ventes. Seules les communes d'au moins 10 ventes sont classées. L'image est écrite dans `docs/`.
+`explorer.py` sert à explorer les fichiers DVF d'un département (taille, colonnes, types de biens,
+cases vides) et à voir ce que retire chaque étape du nettoyage.
 
 ## L'API
 
-`api.py` expose les fonctions de `immo.py` en HTTP, pour le site. Elle ne contient aucune logique
-métier : elle traduit les requêtes en appels à `immo.py` et les résultats en réponses JSON.
-`data/prix_communes.csv` est lu **une seule fois**, au démarrage ; si le fichier manque, le
-serveur refuse de démarrer avec un message clair.
+`api.py` expose les fonctions de `modele.py` et `immo.py` en HTTP, pour le site. Elle ne contient
+aucune logique métier : elle traduit les requêtes en appels et les résultats en réponses JSON.
+`prix_communes.csv` et `modeles.joblib` sont lus **une seule fois**, au démarrage. Si
+`prix_communes.csv` manque, le serveur refuse de démarrer avec un message clair ; si
+`modeles.joblib` manque, il démarre et répond avec les médianes seules.
 
 ```powershell
 python -m uvicorn api:app --reload      # http://127.0.0.1:8000, documentation sur /docs
@@ -233,13 +294,15 @@ python -m uvicorn api:app --reload      # http://127.0.0.1:8000, documentation s
 |---|---|
 | `GET /health` | `{"status": "ok"}` : vérifie que le service tourne |
 | `GET /communes` | la liste des noms de communes connues (autocomplétion) |
-| `GET /info` | la zone couverte, déduite des données : `{"departements": ["51"], "annee_min": 2023, "annee_max": 2025, "nombre_communes": 586}` |
-| `GET /estimation?commune=Reims&type_local=Appartement&surface=65` | le dictionnaire de `estimer()` |
+| `GET /info` | la zone couverte, déduite des données : départements, villes, années, nombre de communes, et les mesures du modèle (erreur médiane de chaque méthode, mesurée sur 2025) |
+| `GET /estimation?commune=Lyon&type_local=Appartement&surface=65` | le dictionnaire de `estimer_prix()`, avec le champ `methode` |
+| `GET /estimation?...&latitude=45.76&longitude=4.83` | idem, avec l'adresse du bien (méthode `adresse`) |
 
 Erreurs de `/estimation`, au format `{"detail": "message"}` : **404** si le bien est introuvable
 (commune inconnue, aucune vente de ce type, moins de 10 ventes), **422** si un paramètre est
-invalide (surface, type de bien, commune ambiguë). Un paramètre manquant ou non numérique donne
-aussi un 422, dont le détail est une liste (format standard de FastAPI).
+invalide (surface, type de bien, commune ambiguë, latitude sans longitude, adresse hors de la
+commune), **429** si la limite de requêtes est atteinte. Un paramètre manquant ou non numérique
+donne aussi un 422, dont le détail est une liste (format standard de FastAPI).
 
 Le **CORS** limite les appels depuis un navigateur aux sites listés dans la variable
 d'environnement `ORIGINES_AUTORISEES` (séparés par des virgules). Par défaut :
@@ -259,8 +322,7 @@ réponse 429 porte aussi les en-têtes CORS, pour que le site puisse l'afficher,
 JavaScript du site.
 
 - Les seuils se règlent avec les variables d'environnement `LIMITE_ESTIMATION` et `LIMITE_DEFAUT`
-  (par exemple `30/minute`).
-- Les compteurs sont gardés en mémoire : ils repartent de zéro quand l'API redémarre.
+  (par exemple `30/minute`). Les compteurs sont en mémoire : ils repartent de zéro au redémarrage.
 - Derrière Caddy, l'adresse du visiteur est lue dans l'en-tête `X-Forwarded-For` (options
   `--proxy-headers` et `--forwarded-allow-ips` du `Dockerfile`). Sans cela, tous les visiteurs
   partageraient l'adresse de Caddy, donc une seule limite. Falsifier cet en-tête ne contourne rien :
@@ -268,15 +330,15 @@ JavaScript du site.
 
 ### Dans Docker
 
-L'image contient le code (`api.py`, `immo.py`) et les bibliothèques de `requirements-api.txt`
-(pandas, FastAPI, uvicorn : environ 280 Mo, sans matplotlib ni scikit-learn). Elle ne contient
-**pas** les données : `data/prix_communes.csv` est monté au lancement, depuis le dossier du serveur
-où il a été déposé. Le serveur tourne avec un utilisateur sans droits (`appuser`), et un
-`HEALTHCHECK` interroge `/health`.
+L'image contient le code (`api.py`, `modele.py`, `immo.py`) et les bibliothèques de
+`requirements-api.txt` (pandas, scikit-learn, FastAPI, uvicorn : environ 480 Mo). Elle ne contient
+**pas** les données : `prix_communes.csv` et `modeles.joblib` sont montés au lancement, depuis le
+dossier du serveur où ils ont été déposés. Le serveur tourne avec un utilisateur sans droits
+(`appuser`), et un `HEALTHCHECK` interroge `/health`.
 
 ```powershell
 docker build -t estimateur-immo-api .
-docker run -d --name estimateur-api -p 127.0.0.1:8000:8000 -v "${PWD}/data:/app/data:ro" estimateur-immo-api
+docker run -d --name estimateur-api -p 127.0.0.1:8000:8000 -v "${PWD}/data/villes:/app/data:ro" estimateur-immo-api
 ```
 
 - `-v ...:/app/data:ro` monte le dossier des données en **lecture seule**. Sans lui, le conteneur
@@ -289,50 +351,45 @@ docker run -d --name estimateur-api -p 127.0.0.1:8000:8000 -v "${PWD}/data:/app/
   de `api.tatane.me` et transmet les requêtes à l'API, qui n'est publiée nulle part. Les données
   sont lues dans `./data`, à côté de `docker-compose.yml`.
 - `requirements-api.txt` est une liste minimale, épinglée. Après un changement de version dans
-  `requirements.txt`, la régénérer dans un environnement vierge qui ne contient que
-  `fastapi`, `uvicorn`, `slowapi`, `pandas` et `numpy`.
+  `requirements.txt`, la régénérer dans un environnement vierge qui ne contient que `fastapi`,
+  `uvicorn`, `slowapi`, `scikit-learn`, `pandas` et `numpy`.
+
+### Mise en ligne
+
+Le serveur est un VPS Ubuntu (utilisateur sans droits particuliers, connexion SSH par clé
+uniquement, pare-feu limité aux ports 22, 80 et 443). Le code est cloné dans `/srv/estimateur`.
+
+- **Mettre à jour le code :** `git pull`, puis `docker compose up -d --build`.
+- **Mettre à jour les données ou le modèle :** copier `prix_communes.csv` et `modeles.joblib` dans
+  `/srv/estimateur/data/` avec `scp`, puis `docker compose restart api` (l'API ne lit les fichiers
+  qu'au démarrage). Le fichier `modeles.joblib` est un fichier pickle : ne jamais charger un fichier
+  dont on n'est pas l'auteur.
 
 ## Choix de méthode
 
 - **Médiane plutôt que moyenne.** Une seule vente aberrante (un bien d'exception, une erreur
   de saisie) déplace beaucoup la moyenne et très peu la médiane.
 - **Une fourchette plutôt qu'un prix unique.** Les deux quartiles encadrent la moitié centrale
-  des ventes.
-- **Le nombre de ventes compte.** Beaucoup de communes n'ont que quelques ventes : leur
-  médiane n'est pas fiable. L'outil refuse de donner une fourchette sous 10 ventes.
-- **Trois années par défaut (2023 à 2025).** Plus d'années donnent plus de ventes par commune,
-  mais mélangent des niveaux de prix différents. Dans la Marne, le prix médian au m² est resté
-  stable de 2022 à 2025 (maisons autour de 1 920 €, appartements entre 2 270 € et 2 350 €), alors
-  que 2021 est nettement plus bas (1 854 € et 2 146 €). Le nombre de couples commune/type de bien
-  qui atteignent 10 ventes dépend directement des années retenues :
-
-  | Années retenues | Couples avec au moins 10 ventes |
-  |---|---:|
-  | 2025 seule | 77 |
-  | 2024 à 2025 | 154 |
-  | **2023 à 2025 (défaut)** | **225** (205 maisons, 20 appartements) |
-  | 2022 à 2025 | 300 |
-  | 2021 à 2025 | 355 |
-
-  Le choix se règle avec le paramètre `annees` de `charger()` ou la constante `ANNEES`.
+  des ventes ; le modèle prédit les mêmes quantiles.
+- **Le nombre de ventes compte.** Une médiane sur quelques ventes n'est pas fiable : l'outil refuse
+  une estimation sous 10 ventes de la commune et du type de bien.
+- **Des filtres relatifs plutôt que fixes** pour les valeurs aberrantes (étape 6 du nettoyage),
+  car les prix varient d'un facteur 3 entre les villes.
+- **Des statistiques sur les années récentes.** Les prix bougent : sur 2025, une médiane de 2024 seule
+  se trompe moins (17,4 %) qu'une médiane de 2021 à 2024 (18,2 %). `prix_communes.csv` porte donc
+  sur 2024 et 2025.
+- **Une adresse optionnelle.** Le formulaire minimal (commune, type, surface) reste utilisable ; l'adresse
+  est ce qui améliore le plus l'estimation, pas le nombre de pièces.
 
 ## Limites
 
-L'estimation est une **statistique descriptive** : la médiane et les quartiles des ventes passées
-d'une commune, multipliés par la surface. Ce n'est pas un modèle prédictif. Elle ne tient pas compte
-du nombre de pièces, de l'étage, de l'état du bien, du terrain, du quartier ni de l'évolution
-des prix à l'intérieur de la période. Elle donne un ordre de grandeur, pas une évaluation.
-
-## Les données
-
-- Source : DVF géolocalisées, sur data.gouv.fr (un fichier CSV par département et par année).
-- Période des fichiers utilisés : du 2 janvier 2023 au 31 décembre 2025.
-- Nommage attendu : `data/<département> <année>.csv`, par exemple `data/51 2025.csv`.
-- Une ligne du fichier n'est **pas** une vente : c'est une parcelle ou un lot d'une vente.
-  Une même vente peut donc occuper plusieurs lignes qui partagent le même `id_mutation`.
-- Colonnes utilisées : `id_mutation`, `nature_mutation`, `valeur_fonciere`, `code_commune`,
-  `nom_commune`, `type_local`, `surface_reelle_bati`.
-- Le dossier `data/` n'est pas versionné : les données sont volumineuses et se re-téléchargent.
+L'estimation est un **ordre de grandeur issu de ventes passées**, pas une expertise. Elle ne tient
+pas compte de l'état du bien, de l'étage, de la présence d'un balcon ou d'un parking, ni des
+rénovations. Les biens vendus en VEFA, ceux dont la vente comprend plusieurs logements et ceux
+dont les lignes ne permettent pas d'isoler un prix sont exclus : les estimations décrivent le
+marché des logements « classiques ». Les maisons sont rares dans les grandes villes (par exemple
+745 ventes à Paris en cinq ans) : leurs estimations sont moins précises. L'Alsace-Moselle n'est
+pas couverte par DVF.
 
 ## Installation et utilisation
 
@@ -342,32 +399,24 @@ Prérequis : Python 3.12 ou plus. Commandes pour PowerShell, depuis la racine du
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-```
-
-Placer ensuite les fichiers DVF du département dans `data/`, avec le nommage ci-dessus (par
-exemple `data/51 2023.csv`, `data/51 2024.csv` et `data/51 2025.csv`), puis :
-
-```powershell
-python explorer.py                 # produit data/prix_communes.csv
-python estimer.py --commune Reims --type Appartement --surface 65
-python graphique.py                # produit docs/communes_les_plus_cheres.png
-python -m uvicorn api:app          # lance l'API sur http://127.0.0.1:8000
+python construire.py
+python evaluer.py
+python modeliser.py
+python estimer.py --commune Lyon --type Appartement --surface 65
 ```
 
 Depuis du code Python, les fonctions s'utilisent directement :
 
 ```python
-import logging
-from immo import charger, nettoyer, prix_par_commune, estimer
+from immo import DATA_DIR, charger_prix_communes
+from modele import charger_modeles, estimer_prix
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")  # facultatif : affiche ce que retire nettoyer()
-
-propre = nettoyer(charger("51"))
-stats = prix_par_commune(propre)
-print(estimer(stats, "Reims", "Appartement", 65))
+dossier = DATA_DIR / "villes"
+print(estimer_prix(charger_prix_communes(dossier), charger_modeles(dossier), "Lyon", "Appartement", 65))
 ```
 
 ## Suite prévue
 
-La mise en ligne de l'API (conteneur Docker, serveur, HTTPS), puis la prise en charge de plusieurs
-départements.
+Tests automatiques et intégration continue, déploiement automatique, puis une explication en
+langage clair de chaque estimation (un LLM met en mots les chiffres du modèle, sans jamais les
+produire ni les modifier).

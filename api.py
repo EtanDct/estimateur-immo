@@ -11,10 +11,12 @@ Variables d'environnement (facultatives) :
     séparés par des virgules. Par défaut : le site et son serveur de développement local.
     LIMITE_ESTIMATION, LIMITE_DEFAUT : nombre de requêtes autorisées par visiteur (adresse IP),
     au format "30/minute". Au-delà, l'API répond 429.
+    DOSSIER_DONNEES : le dossier qui contient prix_communes.csv et modeles.joblib (par défaut data/villes/).
 """
 
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,7 +26,8 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
-from immo import BienIntrouvable, ParametreInvalide, charger_prix_communes, estimer, noms_communes, zone_couverte
+from immo import DATA_DIR, BienIntrouvable, ParametreInvalide, charger_prix_communes, noms_communes, zone_couverte
+from modele import charger_modeles, estimer_prix
 
 ORIGINES_PAR_DEFAUT = "https://www.tatane.me,https://tatane.me,http://localhost:4321"
 
@@ -47,15 +50,27 @@ def _origines_autorisees():
 
 @asynccontextmanager
 async def demarrage(app):
-    """Au démarrage : lit prix_communes.csv une seule fois et prépare les réponses qui ne changent pas.
+    """Au démarrage : lit les données une seule fois et prépare les réponses qui ne changent pas.
 
-    Les requêtes lisent ensuite app.state : le fichier n'est jamais relu. S'il manque,
-    le serveur refuse de démarrer avec un message clair, plutôt que d'échouer à la première requête.
+    Les requêtes lisent ensuite app.state : les fichiers ne sont jamais relus. Si prix_communes.csv
+    manque, le serveur refuse de démarrer avec un message clair, plutôt que d'échouer à la première
+    requête. Si modeles.joblib manque, il démarre quand même et répond avec les médianes seules
+    (méthode "mediane") : le code peut être mis en ligne avant le fichier du modèle.
     """
-    prix = charger_prix_communes()
+    dossier = Path(os.environ.get("DOSSIER_DONNEES", DATA_DIR / "villes"))
+    prix = charger_prix_communes(dossier)
+    modeles = charger_modeles(dossier)
     app.state.prix = prix
+    app.state.modeles = modeles
     app.state.communes = noms_communes(prix)
     app.state.info = zone_couverte(prix)
+    if modeles is not None:
+        # Ce que le site affiche dans « Sous le capot » : de vraies mesures, lues avec le modèle.
+        app.state.info["modele"] = {
+            "methodes": ["adresse", "commune", "mediane"],
+            "entrainement": list(modeles["annees"]),
+            **modeles["metriques"].get("resume", {}),
+        }
     yield
 
 
@@ -119,10 +134,17 @@ def info(request: Request):
 # pour ne pas figer le serveur pendant ce temps.
 @app.get("/estimation")
 @limiter.limit(LIMITE_ESTIMATION)
-def estimation(request: Request, commune: str, type_local: str, surface: float):
-    """Estime la fourchette de prix d'un bien. Erreur 404 : bien introuvable. Erreur 422 : paramètre invalide."""
+def estimation(
+    request: Request, commune: str, type_local: str, surface: float,
+    latitude: float | None = None, longitude: float | None = None,
+):
+    """Estime la fourchette de prix d'un bien. Erreur 404 : bien introuvable. Erreur 422 : paramètre invalide.
+
+    latitude et longitude (facultatives, à donner ensemble) sont la position de l'adresse du bien :
+    l'estimation est alors bien plus précise. Le champ methode de la réponse dit comment elle a été faite.
+    """
     try:
-        return estimer(request.app.state.prix, commune, type_local, surface)
+        return estimer_prix(request.app.state.prix, request.app.state.modeles, commune, type_local, surface, latitude, longitude)
     except BienIntrouvable as erreur:
         raise HTTPException(status_code=404, detail=str(erreur)) from erreur
     except ParametreInvalide as erreur:

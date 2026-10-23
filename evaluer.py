@@ -1,25 +1,32 @@
 """Compare les modèles à la référence (médiane par commune) sur les ventes de la dernière année.
 
 On entraîne sur les années d'avant et on teste sur la dernière : le modèle ne voit jamais le prix
-des ventes qu'il doit estimer. Les données viennent de construire.py.
+des ventes qu'il doit estimer. Les données viennent de construire.py. Les mesures sont aussi
+écrites dans data/villes/evaluation.json, pour modeliser.py.
 
 À lancer depuis la racine du projet : python evaluer.py
 """
 
+import json
+
 import pandas as pd
 
+from immo import DATA_DIR
 from modele import (
-    ANNEE_TEST, VARIABLES_A, VARIABLES_B, VARIABLES_C,
+    ANNEE_TEST, VARIABLES_ADRESSE, VARIABLES_COMMUNE, VARIABLES_COMPLET, VARIABLES_PIECES,
     charger_ventes, entrainer, mesurer_erreur, mesurer_fourchette,
     predire_par_groupe, separer_par_annee,
 )
 from villes import VILLE_DE
 
+DOSSIER = DATA_DIR / "villes"
+
 REFERENCE = "Référence : médiane de toutes les années"
 REFERENCE_RECENTE = "Référence : médiane de la dernière année"
-MODELE_A = "Modèle A : commune, type, surface, année"
-MODELE_B = "Modèle B : A + pièces et terrain"
-MODELE_C = "Modèle C : B + position exacte (plafond)"
+MODELE_COMMUNE = "Modèle commune : commune, type, surface, année"
+MODELE_PIECES = "Modèle commune + pièces et terrain"
+MODELE_ADRESSE = "Modèle adresse : type, surface, année, position"
+MODELE_COMPLET = "Modèle complet : tout (plafond)"
 
 
 def _par_groupe(entrainement, test):
@@ -44,12 +51,16 @@ def main():
     print(f"Entraînement : {len(entrainement):,} ventes ({entrainement['annee'].min()} à {entrainement['annee'].max()})".replace(",", " "))
     print(f"Test         : {len(test):,} ventes ({ANNEE_TEST})\n".replace(",", " "))
 
-    # Le modèle prédit pour l'année du test : on la lui donne comme variable "annee".
     predictions = {
         REFERENCE: _par_groupe(entrainement, test),
         REFERENCE_RECENTE: _par_groupe(derniere_annee, test),
     }
-    for nom, variables in {MODELE_A: VARIABLES_A, MODELE_B: VARIABLES_B, MODELE_C: VARIABLES_C}.items():
+    for nom, variables in {
+        MODELE_COMMUNE: VARIABLES_COMMUNE,
+        MODELE_PIECES: VARIABLES_PIECES,
+        MODELE_ADRESSE: VARIABLES_ADRESSE,
+        MODELE_COMPLET: VARIABLES_COMPLET,
+    }.items():
         predictions[nom] = _par_modele(entrainement, test, variables)
 
     resultats = {}
@@ -71,10 +82,32 @@ def main():
             lignes[groupe] = {
                 "Ventes": len(idx),
                 "Réf. récente %": _erreur_mediane(ventes_du_groupe, predictions[REFERENCE_RECENTE][0][idx]),
-                "Modèle B %": _erreur_mediane(ventes_du_groupe, predictions[MODELE_B][0][idx]),
+                "Commune %": _erreur_mediane(ventes_du_groupe, predictions[MODELE_COMMUNE][0][idx]),
+                "Adresse %": _erreur_mediane(ventes_du_groupe, predictions[MODELE_ADRESSE][0][idx]),
             }
         print(f"\nErreur médiane par {critere} (en %) :")
         print(pd.DataFrame(lignes).T.round(1).to_string())
+
+    arrondies = {nom: {cle: round(float(valeur), 1) for cle, valeur in mesures_du_modele.items()} for nom, mesures_du_modele in resultats.items()}
+    mesures = {
+        "entrainement": [int(entrainement["annee"].min()), int(entrainement["annee"].max())],
+        "test": ANNEE_TEST,
+        "ventes_test": len(test),
+        "modeles": arrondies,
+        # Le résumé que l'API affiche : l'erreur médiane (en %) de chaque méthode d'estimation.
+        "resume": {
+            "annee_testee": ANNEE_TEST,
+            "ventes_testees": len(test),
+            "erreur_mediane_pct": {
+                "mediane": arrondies[REFERENCE_RECENTE]["erreur_mediane_pct"],
+                "commune": arrondies[MODELE_COMMUNE]["erreur_mediane_pct"],
+                "adresse": arrondies[MODELE_ADRESSE]["erreur_mediane_pct"],
+            },
+            "couverture_fourchette_pct": arrondies[MODELE_COMMUNE]["couverture_pct"],
+        },
+    }
+    (DOSSIER / "evaluation.json").write_text(json.dumps(mesures, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\nMesures écrites dans {DOSSIER / 'evaluation.json'}")
 
 
 if __name__ == "__main__":

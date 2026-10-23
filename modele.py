@@ -3,6 +3,10 @@
 Comme immo.py, ce module n'affiche rien : evaluer.py l'appelle et présente les résultats.
 """
 
+import math
+from pathlib import Path
+
+import joblib
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
@@ -10,7 +14,7 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OrdinalEncoder
 
-from immo import DATA_DIR
+from immo import DATA_DIR, ParametreInvalide, chercher_ligne, estimer
 
 # L'année de test : on entraîne sur les années d'avant, on teste sur celle-ci, comme en vrai
 # (le modèle prédit l'avenir à partir du passé).
@@ -20,14 +24,20 @@ ANNEE_TEST = 2025
 # traite comme des étiquettes, sans ordre : la commune 75110 n'est pas « plus grande » que 75101.
 CATEGORIELLES = ("code_commune", "type_local")
 
-# Les variables que chaque modèle a le droit d'utiliser. A : ce que le formulaire demande déjà,
-# plus l'année de la vente (les prix bougent : le modèle apprend à donner plus de poids aux années
-# récentes, et à la prédiction on lui donne la dernière année connue).
-# B : le formulaire demanderait aussi le nombre de pièces et la surface du terrain.
-# C : B + la position exacte du bien, que le formulaire ne connaît pas (sert de plafond).
-VARIABLES_A = ("code_commune", "type_local", "surface_reelle_bati", "annee")
-VARIABLES_B = VARIABLES_A + ("nombre_pieces_principales", "surface_terrain")
-VARIABLES_C = VARIABLES_B + ("latitude", "longitude")
+# Les variables que chaque modèle a le droit d'utiliser. L'année de la vente en fait partie : les
+# prix bougent, le modèle apprend à donner plus de poids aux années récentes, et à la prédiction on
+# lui donne la dernière année connue.
+VARIABLES_COMMUNE = ("code_commune", "type_local", "surface_reelle_bati", "annee")  # le formulaire actuel
+VARIABLES_PIECES = VARIABLES_COMMUNE + ("nombre_pieces_principales", "surface_terrain")  # + pièces et terrain
+VARIABLES_ADRESSE = ("type_local", "surface_reelle_bati", "annee", "latitude", "longitude")  # + position du bien
+VARIABLES_COMPLET = VARIABLES_PIECES + ("latitude", "longitude")  # tout (plafond de ce qu'on sait faire)
+
+# Le modèle entraîné est enregistré dans ce fichier, à côté des statistiques par commune.
+FICHIER_MODELES = "modeles.joblib"
+
+# Une adresse est acceptée si elle tombe dans la zone des ventes de sa commune, élargie de cette
+# marge (en degrés, environ 3 km). Sert à refuser une adresse de Bordeaux pour la commune de Lille.
+MARGE_DEGRES = 0.03
 
 
 def charger_ventes(dossier=DATA_DIR / "villes"):
@@ -122,3 +132,105 @@ def mesurer_fourchette(reel, bas, haut):
     dedans = (reel >= bas) & (reel <= haut)
     largeur = (haut - bas) / ((haut + bas) / 2)
     return {"couverture_pct": dedans.mean() * 100, "largeur_pct": largeur.median() * 100}
+
+
+def zones_communes(ventes, regroupements=None):
+    """Calcule, pour chaque commune, la zone (latitude et longitude min et max) de ses ventes.
+
+    regroupements : comme pour immo.regrouper_communes(), pour que « Paris » ait aussi sa zone.
+    Renvoie {code_commune: (lat_min, lat_max, lon_min, lon_max)}.
+    """
+    zones = {}
+    for code, groupe in ventes.dropna(subset=["latitude", "longitude"]).groupby("code_commune"):
+        zones[code] = (groupe["latitude"].min(), groupe["latitude"].max(), groupe["longitude"].min(), groupe["longitude"].max())
+    for code, (_, codes) in (regroupements or {}).items():
+        morceaux = [zones[c] for c in codes if c in zones]
+        zones[code] = (min(z[0] for z in morceaux), max(z[1] for z in morceaux), min(z[2] for z in morceaux), max(z[3] for z in morceaux))
+    return zones
+
+
+def entrainer_modeles(ventes, regroupements=None, metriques=None):
+    """Entraîne les modèles finaux sur toutes les ventes et renvoie ce qu'il faut pour les utiliser.
+
+    Deux modèles, chacun en trois exemplaires (25e centile, médiane, 75e centile) :
+    « commune » (commune, type, surface, année) et « adresse » (type, surface, année, position).
+    metriques : les mesures de evaluer.py, gardées avec les modèles pour être affichées.
+    """
+    annee = int(ventes["annee"].max())
+    return {
+        "commune": {q: entrainer(ventes, VARIABLES_COMMUNE, q) for q in (0.25, 0.5, 0.75)},
+        "adresse": {q: entrainer(ventes, VARIABLES_ADRESSE, q) for q in (0.25, 0.5, 0.75)},
+        "annee": annee,
+        "annees": (int(ventes["annee"].min()), annee),
+        "communes": sorted(ventes["code_commune"].unique()),
+        "zones": zones_communes(ventes, regroupements),
+        "metriques": metriques or {},
+    }
+
+
+def enregistrer_modeles(modeles, dossier=DATA_DIR):
+    """Écrit les modèles dans <dossier>/modeles.joblib."""
+    joblib.dump(modeles, Path(dossier) / FICHIER_MODELES, compress=3)
+
+
+def charger_modeles(dossier=DATA_DIR):
+    """Lit <dossier>/modeles.joblib. Renvoie None si le fichier n'existe pas.
+
+    Le fichier est lu avec pickle (via joblib), qui peut exécuter du code : ne charger que
+    un fichier produit par modeliser.py et déposé par soi-même sur le serveur.
+    """
+    chemin = Path(dossier) / FICHIER_MODELES
+    return joblib.load(chemin) if chemin.exists() else None
+
+
+def estimer_prix(prix, modeles, commune, type_local, surface, latitude=None, longitude=None):
+    """Estime une fourchette de prix avec le meilleur modèle disponible pour la demande.
+
+    - latitude et longitude donnés (l'adresse du bien) : le modèle « adresse », méthode "adresse".
+    - sinon, une commune que le modèle connaît : le modèle « commune », méthode "commune".
+    - sinon (« Paris » en entier, ou pas de modèle) : les médianes et quartiles de immo.estimer(),
+      méthode "mediane".
+    Renvoie le même dictionnaire que immo.estimer(), plus la clé methode. Les ventes comptées
+    (nombre_ventes, annee_min, annee_max) sont celles des statistiques de la commune.
+    Lève les mêmes ValueError que immo.estimer(), et ParametreInvalide si une seule des deux
+    coordonnées est donnée, si elles sont invalides, ou si l'adresse n'est pas dans la commune.
+    """
+    if (latitude is None) != (longitude is None):
+        raise ParametreInvalide("La latitude et la longitude vont ensemble : donner les deux ou aucune.")
+
+    ligne = chercher_ligne(prix, commune, type_local, surface)
+    code = ligne["code_commune"]
+
+    if latitude is not None:
+        if not (math.isfinite(latitude) and math.isfinite(longitude)):
+            raise ParametreInvalide("La latitude et la longitude doivent être des nombres.")
+        if modeles is not None and code in modeles["zones"]:
+            lat_min, lat_max, lon_min, lon_max = modeles["zones"][code]
+            if not (lat_min - MARGE_DEGRES <= latitude <= lat_max + MARGE_DEGRES
+                    and lon_min - MARGE_DEGRES <= longitude <= lon_max + MARGE_DEGRES):
+                raise ParametreInvalide(f"Cette adresse ne se trouve pas à {ligne['nom_commune']}.")
+
+    if modeles is None or (latitude is None and code not in modeles["communes"]):
+        return {**estimer(prix, commune, type_local, surface), "methode": "mediane"}
+
+    methode = "adresse" if latitude is not None else "commune"
+    demande = pd.DataFrame([{
+        "code_commune": code, "type_local": ligne["type_local"], "surface_reelle_bati": surface,
+        "annee": modeles["annee"], "latitude": latitude, "longitude": longitude,
+    }])
+    # Trois prédictions indépendantes peuvent se croiser (le 25e centile au-dessus de la médiane) :
+    # on les remet dans l'ordre.
+    bas, milieu, haut = sorted(float(modeles[methode][q].predict(demande)[0]) for q in (0.25, 0.5, 0.75))
+    return {
+        "commune": ligne["nom_commune"],
+        "type_local": ligne["type_local"],
+        "surface": surface,
+        "nombre_ventes": int(ligne["nombre_ventes"]),
+        "annee_min": int(ligne["annee_min"]),
+        "annee_max": int(ligne["annee_max"]),
+        "prix_m2_median": milieu,
+        "prix_bas": surface * bas,
+        "prix_median": surface * milieu,
+        "prix_haut": surface * haut,
+        "methode": methode,
+    }

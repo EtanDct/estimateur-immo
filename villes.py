@@ -23,8 +23,10 @@ VILLES = {
 }
 
 
-# Le nom de la ville pour chaque code de commune : "75110" -> "Paris".
+# Le nom de la ville pour chaque code de commune : "75110" -> "Paris". Le code INSEE de la
+# ville entière ("75056") y figure aussi.
 VILLE_DE = {code: nom for nom, (_, _, codes) in VILLES.items() for code in codes}
+VILLE_DE.update({code_ville: nom for nom, (_, code_ville, _) in VILLES.items()})
 
 
 def departements():

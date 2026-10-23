@@ -1,10 +1,11 @@
-# Image de l'API. Elle contient le code (api.py, immo.py) mais PAS les données :
-# data/prix_communes.csv est monté depuis le serveur au lancement (voir le README).
+# Image de l'API. Elle contient le code (api.py, immo.py, modele.py) mais PAS les données :
+# prix_communes.csv et modeles.joblib sont montés depuis le serveur au lancement (voir le README).
 FROM python:3.15-slim
 
 # Pas de fichiers .pyc, et les messages s'affichent tout de suite dans les logs du conteneur.
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    DOSSIER_DONNEES=/app/data
 
 WORKDIR /app
 
@@ -12,7 +13,7 @@ WORKDIR /app
 COPY requirements-api.txt .
 RUN pip install --no-cache-dir -r requirements-api.txt
 
-COPY immo.py api.py ./
+COPY immo.py modele.py api.py ./
 
 # Un utilisateur sans droits particuliers : le serveur ne tourne pas en root.
 RUN useradd --system --no-create-home appuser

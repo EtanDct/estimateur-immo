@@ -241,13 +241,11 @@ def _normaliser(texte):
     return " ".join(simple.split())  # split() + join : supprime les espaces en trop
 
 
-def estimer(prix, commune, type_local, surface, ventes_min=VENTES_MIN):
-    """Estime une fourchette de prix pour un bien, à partir des statistiques par commune.
+def chercher_ligne(prix, commune, type_local, surface, ventes_min=VENTES_MIN):
+    """Vérifie les paramètres d'une estimation et renvoie la ligne de statistiques qui la concerne.
 
     prix : le tableau produit par prix_par_commune() (ou lu par charger_prix_communes()).
-    Renvoie un dictionnaire : commune, type_local, surface, nombre_ventes, annee_min,
-    annee_max, prix_m2_median, et prix_bas / prix_median / prix_haut (surface x quartile_1,
-    mediane, quartile_3).
+    La ligne renvoyée porte le nom de commune et le type de bien écrits comme dans le tableau.
     Lève une ValueError au message clair : ParametreInvalide si la surface ou le type de bien
     est invalide ou si le nom de commune désigne plusieurs communes, BienIntrouvable si la
     commune est inconnue ou compte moins de ventes_min ventes.
@@ -282,10 +280,21 @@ def estimer(prix, commune, type_local, surface, ventes_min=VENTES_MIN):
             f"Seulement {ligne['nombre_ventes']} vente(s) de {type_local.lower()} à {nom} : "
             f"il en faut au moins {ventes_min} pour une estimation fiable."
         )
+    return ligne
 
+
+def estimer(prix, commune, type_local, surface, ventes_min=VENTES_MIN):
+    """Estime une fourchette de prix pour un bien, à partir des statistiques par commune.
+
+    prix : le tableau produit par prix_par_commune() (ou lu par charger_prix_communes()).
+    Renvoie un dictionnaire : commune, type_local, surface, nombre_ventes, annee_min,
+    annee_max, prix_m2_median, et prix_bas / prix_median / prix_haut (surface x quartile_1,
+    mediane, quartile_3). Les erreurs sont celles de chercher_ligne().
+    """
+    ligne = chercher_ligne(prix, commune, type_local, surface, ventes_min)
     return {
-        "commune": nom,
-        "type_local": type_local,
+        "commune": ligne["nom_commune"],
+        "type_local": ligne["type_local"],
         "surface": surface,
         "nombre_ventes": int(ligne["nombre_ventes"]),
         "annee_min": int(ligne["annee_min"]),
@@ -310,14 +319,18 @@ def _departement(code_commune):
 def zone_couverte(prix):
     """Décrit ce que couvrent les données : départements, première et dernière année, nombre de communes.
 
-    Tout est déduit du tableau : rien n'est écrit en dur.
+    Tout est déduit du tableau : rien n'est écrit en dur. Si le tableau a une colonne ville
+    (voir construire.py), la zone liste aussi les villes.
     """
-    return {
+    zone = {
         "departements": sorted(prix["code_commune"].map(_departement).unique()),
         "annee_min": int(prix["annee_min"].min()),
         "annee_max": int(prix["annee_max"].max()),
         "nombre_communes": int(prix["code_commune"].nunique()),
     }
+    if "ville" in prix.columns:
+        zone["villes"] = sorted(prix["ville"].dropna().unique(), key=_normaliser)
+    return zone
 
 
 def classer_communes(prix, type_local, ventes_min=VENTES_MIN):

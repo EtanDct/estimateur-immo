@@ -1,6 +1,6 @@
-"""Trace le graphique des communes les plus chères et l'enregistre dans docs/.
+"""Trace le prix médian au m² des dix grandes villes et l'enregistre dans docs/.
 
-À lancer depuis la racine du projet, après explorer.py : python graphique.py
+À lancer depuis la racine du projet, après construire.py : python graphique.py
 """
 
 from pathlib import Path
@@ -8,10 +8,12 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
-from immo import VENTES_MIN, charger_prix_communes, classer_communes
+from immo import DATA_DIR, VENTES_MIN, charger_prix_communes, classer_communes
+from villes import VILLES
 
-NB_COMMUNES = 15
-SORTIE = Path(__file__).parent / "docs" / "communes_les_plus_cheres.png"
+NB_COMMUNES = len(VILLES)
+DOSSIER = DATA_DIR / "villes"  # là où construire.py écrit prix_communes.csv
+SORTIE = Path(__file__).parent / "docs" / "villes_les_plus_cheres.png"
 
 # Couleurs : une seule teinte pour l'ordre de grandeur, le reste en gris discrets.
 SURFACE = "#fcfcfb"
@@ -55,8 +57,9 @@ def _tracer(ax, classement, titre):
 
 
 def main():
-    prix = charger_prix_communes()
-    departement = prix["code_commune"].str[:2].iloc[0]  # le code de commune commence par le département
+    prix = charger_prix_communes(DOSSIER)
+    # Une ligne par ville : le code INSEE de la ville (« Paris » entière, pas ses arrondissements).
+    prix = prix[prix["code_commune"].isin([code_ville for _, code_ville, _ in VILLES.values()])]
 
     maisons = classer_communes(prix, "Maison")
     appartements = classer_communes(prix, "Appartement")
@@ -69,17 +72,17 @@ def main():
         gridspec_kw={"height_ratios": [n_maisons, n_apparts]}, facecolor=SURFACE,
     )
 
-    _tracer(ax1, maisons, f"Maisons : {n_maisons} communes les plus chères (sur {len(maisons)})")
-    _tracer(ax2, appartements, f"Appartements : {n_apparts} communes les plus chères (sur {len(appartements)})")
+    _tracer(ax1, maisons, "Maisons")
+    _tracer(ax2, appartements, "Appartements")
     ax2.set_xlabel("Prix médian au m² (€)", color=ENCRE_DISCRETE, fontsize=9, loc="left")
     ax2.set_xlim(0, max(maisons["mediane"].max(), appartements["mediane"].max()) * 1.38)
 
     fig.suptitle(
-        f"Communes les plus chères du département {departement}",
+        f"Prix au m² dans les {NB_COMMUNES} grandes villes",
         x=0.02, ha="left", fontsize=14, fontweight="bold", color=ENCRE,
     )
     annees = f"{prix['annee_min'].min()} à {prix['annee_max'].max()}"
-    fig.text(0.02, 0.945, f"Médiane du prix au m² des ventes DVF de {annees}. Seules les communes avec au moins {VENTES_MIN} ventes sont classées.",
+    fig.text(0.02, 0.945, f"Médiane du prix au m² des ventes DVF de {annees}. Seules les villes avec au moins {VENTES_MIN} ventes de ce type de bien sont classées.",
              ha="left", fontsize=9.5, color=ENCRE_SECONDAIRE)
     fig.tight_layout(rect=(0, 0, 1, 0.94), h_pad=2.5)
 
