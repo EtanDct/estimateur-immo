@@ -8,10 +8,11 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Une nouvelle modification annule la vérification précédente de la même branche.
+# Sur une pull request, une nouvelle modification annule la vérification précédente (elle serait périmée).
+# Sur main, jamais : chaque commit garde sa vérification complète.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # Le strict nécessaire : lire le code. Aucune vérification n'a besoin de modifier le dépôt.
 permissions:
