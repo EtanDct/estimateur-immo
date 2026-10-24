@@ -541,6 +541,11 @@ request, avec deux tâches :
    qu'elle soit saine, vérifie une estimation, l'absence d'en-tête `Server` et que la requête n'est
    pas écrite dans les journaux (elle contient la position du bien).
 
+Dependabot (`.github/dependabot.yml`) vérifie chaque lundi les bibliothèques Python et les actions
+GitHub, et ouvre une pull request quand une version est sortie : la CI la teste, rien n'est fusionné
+sans accord. `scikit-learn` en est exclu : `modeles.joblib` doit être relu par la version qui l'a écrit,
+donc on change de version en réentraînant le modèle puis en renvoyant le fichier sur le serveur.
+
 ## Suite prévue
 
 Déploiement automatique après des tests réussis, puis une explication en langage clair de chaque

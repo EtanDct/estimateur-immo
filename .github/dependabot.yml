@@ -1,0 +1,32 @@
+# Dependabot ouvre une pull request quand une dépendance a une nouvelle version ; la CI la vérifie.
+# Rien n'est fusionné tout seul : c'est toi qui décides.
+version: 2
+
+updates:
+  # Les bibliothèques Python des trois fichiers requirements-*.txt (versions exactes).
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # Les mises à jour mineures et correctifs arrivent dans une seule pull request ;
+    # une version majeure (changements incompatibles possibles) a la sienne.
+    groups:
+      python-mineures:
+        update-types: [minor, patch]
+    ignore:
+      # modeles.joblib est écrit par scikit-learn et doit être relu par la même version :
+      # changer de version se fait avec un nouvel entraînement (python -m estimateur modeliser),
+      # puis un envoi du fichier sur le serveur (voir le README), pas par une pull request.
+      - dependency-name: scikit-learn
+    open-pull-requests-limit: 5
+
+  # Les actions utilisées par .github/workflows/ci.yml (checkout, setup-python).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
