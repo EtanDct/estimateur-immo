@@ -25,6 +25,9 @@ from estimateur.villes import VILLE_DE, regroupements  # noqa: E402
 # Dans les tests d'API, les visiteurs viennent de cette origine, la seule que l'API autorise par défaut.
 ORIGINE_DU_SITE = "https://www.tatane.me"
 
+# Ce que la commande modeliser écrit dans le fichier de modèles : la date et le commit du code qui entraîne.
+TRACABILITE = {"entraine_le": "2026-10-23", "commit": "0123456789ab"}
+
 ANNEE_MAX = 2025
 
 # Les communes factices : (code, nom, latitude, longitude du centre, prix au m² d'un appartement,
@@ -98,7 +101,9 @@ def prix(ventes):
 @pytest.fixture(scope="session")
 def modeles(ventes):
     """Les modèles entraînés sur les ventes factices : trois quantiles, deux modèles (commune et adresse)."""
-    return entrainer_modeles(ventes, regroupements(), {"resume": {"annee_testee": 2025, "erreur_mediane_pct": {"adresse": 10.0}}})
+    modeles = entrainer_modeles(ventes, regroupements(), {"resume": {"annee_testee": 2025, "erreur_mediane_pct": {"adresse": 10.0}}})
+    modeles["tracabilite"] = TRACABILITE  # ce que la commande modeliser ajoute avant d'enregistrer
+    return modeles
 
 
 @pytest.fixture(scope="session")

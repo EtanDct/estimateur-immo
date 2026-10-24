@@ -1,11 +1,16 @@
 """Tests de modele.py : mesurer honnêtement, entraîner, enregistrer et estimer avec une adresse."""
 
+import datetime
+import re
+import subprocess
+
 import numpy as np
 import pandas as pd
 import pytest
 from sklearn.neighbors import NearestNeighbors
 
 from conftest import EN_MER, LILLE, LYON_1ER, LYON_3E, PARIS_1ER
+from estimateur import modele
 from estimateur.config import SURFACE_MAX, SURFACE_MIN
 from estimateur.estimation import ParametreInvalide
 from estimateur.modele import (
@@ -21,6 +26,7 @@ from estimateur.modele import (
     mesurer_fourchette,
     predire_par_groupe,
     separer_par_annee,
+    tracabilite,
     zones_communes,
 )
 from estimateur.villes import regroupements
@@ -134,6 +140,41 @@ def test_les_modeles_enregistres_donnent_les_memes_predictions(tmp_path, modeles
         for quantile in (0.25, 0.5, 0.75):
             assert relus[nom][quantile].predict(demande)[0] == modeles[nom][quantile].predict(demande)[0]
     assert relus["surfaces"] == modeles["surfaces"]
+
+
+def test_les_modeles_gardent_le_nombre_de_ventes_d_entrainement(modeles, ventes):
+    assert modeles["nombre_ventes"] == len(ventes)
+
+
+def test_la_tracabilite_donne_la_date_du_jour_et_le_commit_du_code():
+    resultat = tracabilite()
+    assert datetime.date.fromisoformat(resultat["entraine_le"]) == datetime.date.today()
+    # Dans une copie du dépôt : un identifiant de commit, éventuellement marqué comme modifié. Sans Git : None.
+    assert resultat["commit"] is None or re.fullmatch(r"[0-9a-f]{12}(\+modifie)?", resultat["commit"])
+
+
+def _git_simule(monkeypatch, commit, etat):
+    """Remplace l'appel à git : rev-parse répond commit, status répond etat."""
+    def faux(arguments, **_):
+        return subprocess.CompletedProcess(arguments, 0, stdout=commit if "rev-parse" in arguments else etat)
+
+    monkeypatch.setattr(modele.subprocess, "run", faux)
+
+
+def test_la_tracabilite_marque_un_code_modifie(monkeypatch):
+    _git_simule(monkeypatch, "0123456789ab", "")
+    assert tracabilite()["commit"] == "0123456789ab"
+    _git_simule(monkeypatch, "0123456789ab", " M estimateur/modele.py")
+    assert tracabilite()["commit"] == "0123456789ab+modifie"
+
+
+@pytest.mark.parametrize("erreur", [FileNotFoundError("git"), subprocess.CalledProcessError(128, "git"), subprocess.TimeoutExpired("git", 10)])
+def test_la_tracabilite_vaut_none_sans_git_utilisable(monkeypatch, erreur):
+    def echoue(*_, **__):
+        raise erreur
+
+    monkeypatch.setattr(modele.subprocess, "run", echoue)
+    assert tracabilite()["commit"] is None
 
 
 def test_charger_modeles_renvoie_none_quand_le_fichier_n_existe_pas(tmp_path):

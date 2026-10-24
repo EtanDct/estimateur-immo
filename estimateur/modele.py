@@ -4,7 +4,9 @@ Comme donnees.py, ce module n'affiche rien : la commande evaluer l'appelle et pr
 """
 
 import math
+import subprocess
 from collections import Counter
+from datetime import date
 from pathlib import Path
 
 import joblib
@@ -210,6 +212,7 @@ def entrainer_modeles(ventes, regroupements=None, metriques=None):
         "adresse": {q: entrainer(ventes, VARIABLES_ADRESSE, q) for q in (0.25, 0.5, 0.75)},
         "annee": annee,
         "annees": (int(ventes["annee"].min()), annee),
+        "nombre_ventes": len(ventes),
         "communes": communes,
         "zones": zones_communes(ventes, regroupements),
         "voisins": voisins,
@@ -218,6 +221,25 @@ def entrainer_modeles(ventes, regroupements=None, metriques=None):
         "surfaces": surfaces,
         "metriques": metriques or {},
     }
+
+
+def tracabilite():
+    """Date du jour et commit du code qui entraîne : de quoi savoir plus tard d'où vient un fichier de modèles.
+
+    Le commit est suivi de « +modifie » si des fichiers suivis par Git ont des modifications non
+    enregistrées : le code qui a entraîné n'est alors pas exactement ce commit. Sans Git, il vaut None.
+    """
+
+    def git(*arguments):
+        return subprocess.run(["git", *arguments], cwd=Path(__file__).parent, capture_output=True, text=True, timeout=10, check=True).stdout.strip()
+
+    try:
+        commit = git("rev-parse", "--short=12", "HEAD")
+        if git("status", "--porcelain", "--untracked-files=no"):
+            commit += "+modifie"
+    except (OSError, subprocess.SubprocessError):
+        commit = None
+    return {"entraine_le": date.today().isoformat(), "commit": commit}
 
 
 def enregistrer_modeles(modeles, dossier=DOSSIER_VILLES):

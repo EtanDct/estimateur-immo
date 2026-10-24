@@ -153,9 +153,14 @@ async def demarrage(app):
     app.state.info = zone_couverte(prix)
     if modeles is not None:
         # Ce que le site affiche dans « Sous le capot » : de vraies mesures, lues avec le modèle.
+        tracabilite = modeles.get("tracabilite", {})
         app.state.info["modele"] = {
             "methodes": ["adresse", "commune", "mediane"],
             "entrainement": list(modeles["annees"]),
+            # D'où vient ce fichier : null s'il a été produit avant que ces champs existent.
+            "entraine_le": tracabilite.get("entraine_le"),
+            "commit": tracabilite.get("commit"),
+            "nombre_ventes": modeles.get("nombre_ventes"),
             # Surfaces acceptées par type de bien, pour que le site les vérifie avant d'appeler.
             "surfaces": {type_local: list(bornes) for type_local, bornes in modeles.get("surfaces", {}).items()},
             **modeles["metriques"].get("resume", {}),

@@ -9,8 +9,9 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import LILLE, LYON_1ER, LYON_3E, ORIGINE_DU_SITE
+from conftest import LILLE, LYON_1ER, LYON_3E, ORIGINE_DU_SITE, TRACABILITE
 from estimateur import api
+from estimateur.modele import enregistrer_modeles
 
 BASE = {"commune": "Lille", "type_local": "Appartement", "surface": 60}
 CLE = "cle-de-test"
@@ -57,7 +58,23 @@ def test_info_decrit_la_zone_et_le_modele(client, modeles):
     assert info["modele"]["erreur_mediane_pct"] == {"adresse": 10.0}  # les mesures de evaluer passent telles quelles
     # Le site lit les bornes de surface ici pour vérifier une demande avant de l'envoyer.
     assert info["modele"]["surfaces"] == {type_local: list(bornes) for type_local, bornes in modeles["surfaces"].items()}
+    # D'où vient le modèle : la date, le commit et le nombre de ventes d'entraînement.
+    assert info["modele"]["entraine_le"] == TRACABILITE["entraine_le"]
+    assert info["modele"]["commit"] == TRACABILITE["commit"]
+    assert info["modele"]["nombre_ventes"] == modeles["nombre_ventes"]
     assert reponse.headers["cache-control"] == "public, max-age=3600"
+
+
+def test_info_donne_null_pour_un_fichier_de_modeles_sans_tracabilite(monkeypatch, tmp_path, prix, modeles):
+    ancien = {cle: valeur for cle, valeur in modeles.items() if cle not in ("tracabilite", "nombre_ventes")}
+    prix.to_csv(tmp_path / "prix_communes.csv", index=False)
+    enregistrer_modeles(ancien, tmp_path)
+    monkeypatch.setenv("DOSSIER_DONNEES", str(tmp_path))
+    monkeypatch.setattr(api, "CLES_API", [])
+    with TestClient(api.app) as client:
+        info = client.get("/info").json()["modele"]
+    assert info["entraine_le"] is None and info["commit"] is None and info["nombre_ventes"] is None
+    assert info["entrainement"] == [2021, 2025]  # le reste du modèle est servi normalement
 
 
 @pytest.mark.parametrize("chemin", ["/health", "/communes", "/info"])
