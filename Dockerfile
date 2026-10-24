@@ -1,5 +1,5 @@
 # Image de l'API. Elle contient le paquet estimateur/ (le code) mais PAS les données :
-# prix_communes.csv et modeles.joblib sont montés depuis le serveur au lancement (voir le README).
+# prix_communes.csv et modeles.joblib sont montés depuis le serveur au lancement (voir docs/API.md).
 FROM python:3.15-slim
 
 # Pas de fichiers .pyc, et les messages s'affichent tout de suite dans les logs du conteneur.
@@ -26,7 +26,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
 
 # 0.0.0.0 : le serveur écoute sur toutes les interfaces DU CONTENEUR. Ce qui est visible
-# depuis l'extérieur se décide au lancement avec -p (voir le README).
+# depuis l'extérieur se décide au lancement avec -p (voir docs/API.md).
 # --proxy-headers et --forwarded-allow-ips "*" : l'adresse du visiteur est lue dans l'en-tête
 # X-Forwarded-For que Caddy écrit, pour que la limite de requêtes s'applique à chaque visiteur
 # et non à Caddy. Sans danger ici : seul Caddy peut joindre ce conteneur (aucun port publié),

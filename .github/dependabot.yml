@@ -17,7 +17,7 @@ updates:
     ignore:
       # modeles.joblib est écrit par scikit-learn et doit être relu par la même version :
       # changer de version se fait avec un nouvel entraînement (python -m estimateur modeliser),
-      # puis un envoi du fichier sur le serveur (voir le README), pas par une pull request.
+      # puis un envoi du fichier sur le serveur (voir docs/API.md), pas par une pull request.
       - dependency-name: scikit-learn
     open-pull-requests-limit: 5
 
