@@ -4,7 +4,7 @@ anyio==4.15.1
 click==8.5.0
 cloudpickle==3.1.2
 Deprecated==3.0.0
-fastapi==0.156.8
+fastapi==0.158.1
 h11==0.16.0
 idna==3.20
 joblib==1.6.0
